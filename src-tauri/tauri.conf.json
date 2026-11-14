@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ciclo",
+  "version": "1.0.0",
+  "identifier": "com.ciclo.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:3000",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Ciclo",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 620,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "shortDescription": "Ciclo de estudos inteligente",
+    "longDescription": "Organize suas sessões de estudo com um ciclo inteligente de disciplinas.",
+    "category": "Education",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "languages": ["PortugueseBR"],
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "language": "pt-BR"
+      }
+    }
+  }
+}
