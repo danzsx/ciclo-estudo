@@ -14,10 +14,12 @@ import { useApp } from "../context/AppContext";
 import { formatClock, formatMinutes, DIFFICULTY_LABELS } from "../core";
 import { getSubjectVisual, formatTiimoDuration } from "../utils/visuals";
 import { SubjectIcon } from "../components/SubjectIcon";
+import { soundEngine } from "../audio";
 
 export const StudyView: React.FC = () => {
   const {
     data,
+    activeCourse,
     activeSession,
     activeElapsedMs,
     currentCycleBlock,
@@ -36,11 +38,23 @@ export const StudyView: React.FC = () => {
   const [finishErrors, setFinishErrors] = useState<Record<string, string>>({});
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
 
-  const currentSubject = currentCycleBlock
-    ? data.subjects.find((s) => s.id === currentCycleBlock.subjectId)
-    : null;
+  const allSubjects = data.courses?.length ? data.courses.flatMap((c) => c.subjects) : data.subjects;
+  const currentSubject = activeSession
+    ? allSubjects.find((s) => s.id === activeSession.subjectId) ?? {
+        id: activeSession.subjectId,
+        name: activeSession.subjectName,
+        weight: 3,
+        difficulty: "medium" as const,
+        sessionMinutes: activeSession.plannedMinutes,
+        color: "#002a32",
+        createdAt: "",
+        updatedAt: "",
+      }
+    : currentCycleBlock
+      ? data.subjects.find((s) => s.id === currentCycleBlock.subjectId)
+      : null;
 
-  if (!currentCycleBlock || !currentSubject) {
+  if ((!activeSession && !currentCycleBlock) || !currentSubject) {
     return (
       <div
         className="editorial-card"
@@ -64,7 +78,7 @@ export const StudyView: React.FC = () => {
 
   const isRunning = activeSession?.status === "running";
   const isPaused = activeSession?.status === "paused";
-  const plannedMinutes = activeSession?.plannedMinutes ?? currentCycleBlock.minutes;
+  const plannedMinutes = activeSession?.plannedMinutes ?? currentCycleBlock!.minutes;
   const elapsedMinutes = activeElapsedMs / 60_000;
   const progressRatio = plannedMinutes > 0 ? Math.min(1, elapsedMinutes / plannedMinutes) : 0;
   const visual = getSubjectVisual(currentSubject.name);
@@ -77,6 +91,12 @@ export const StudyView: React.FC = () => {
     setCustomMinutesInput(String(mins > 0 ? mins : plannedMinutes));
     setFinishErrors({});
     setFinishModalOpen(true);
+    void soundEngine.play("ui-modal-open");
+  };
+
+  const closeFinishModal = () => {
+    setFinishModalOpen(false);
+    void soundEngine.play("ui-modal-close");
   };
 
   const handleConfirmFinish = (e: React.FormEvent) => {
@@ -113,7 +133,9 @@ export const StudyView: React.FC = () => {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem" }}>
               <span className="section-kicker" style={{ marginBottom: 0 }}>
-                Ciclo #{data.cycle.cycleNumber} • Bloco {currentCycleBlock.part} de {currentCycleBlock.parts}
+                {(activeSession?.courseName ?? activeCourse?.name) ? `${activeSession?.courseName ?? activeCourse?.name} • ` : ""}
+                Ciclo #{activeSession?.cycleNumber ?? data.cycle.cycleNumber}
+                {currentCycleBlock && !activeSession ? ` • Bloco ${currentCycleBlock.part} de ${currentCycleBlock.parts}` : ""}
               </span>
             </div>
 
@@ -205,7 +227,15 @@ export const StudyView: React.FC = () => {
               backgroundColor: isRunning ? "#73ba9b" : isPaused ? "#f7a072" : "var(--text-muted)",
             }}
           />
-          <span>{isRunning ? "Foco em Curso" : isPaused ? "Sessão Pausada" : "Pronto para Iniciar"}</span>
+          <span>
+            {isRunning
+              ? elapsedMinutes >= plannedMinutes
+                ? "Meta Atingida"
+                : "Foco em Curso"
+              : isPaused
+              ? "Sessão Pausada"
+              : "Pronto para Iniciar"}
+          </span>
         </div>
 
         {/* High-Precision Digital Clock */}
@@ -299,7 +329,10 @@ export const StudyView: React.FC = () => {
             <button
               className="btn-icon"
               style={{ fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "0.4rem", fontWeight: 500 }}
-              onClick={() => setConfirmDiscardOpen(true)}
+              onClick={() => {
+                setConfirmDiscardOpen(true);
+                void soundEngine.play("ui-modal-open");
+              }}
             >
               <RotateCcw size={14} />
               <span>Descartar sessão atual</span>
@@ -346,7 +379,7 @@ export const StudyView: React.FC = () => {
 
       {/* Finish Session Confirmation Modal */}
       {finishModalOpen && (
-        <div className="modal-overlay" onClick={() => setFinishModalOpen(false)}>
+        <div className="modal-overlay" onClick={closeFinishModal}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <form onSubmit={handleConfirmFinish}>
               <div className="modal-header">
@@ -382,7 +415,7 @@ export const StudyView: React.FC = () => {
               </div>
 
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setFinishModalOpen(false)}>
+                <button type="button" className="btn btn-secondary" onClick={closeFinishModal}>
                   Cancelar
                 </button>
                 <button type="submit" className="btn btn-primary">
@@ -396,7 +429,13 @@ export const StudyView: React.FC = () => {
 
       {/* Discard Confirmation Modal */}
       {confirmDiscardOpen && (
-        <div className="modal-overlay" onClick={() => setConfirmDiscardOpen(false)}>
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            setConfirmDiscardOpen(false);
+            void soundEngine.play("ui-modal-close");
+          }}
+        >
           <div className="modal-content" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-body" style={{ textAlign: "center", padding: "2rem" }}>
               <div
@@ -421,7 +460,13 @@ export const StudyView: React.FC = () => {
                 O tempo corrido será zerado sem registro no histórico e a posição atual do ciclo será mantida.
               </p>
               <div style={{ display: "flex", gap: "0.65rem", justifyContent: "center" }}>
-                <button className="btn btn-secondary" onClick={() => setConfirmDiscardOpen(false)}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setConfirmDiscardOpen(false);
+                    void soundEngine.play("ui-modal-close");
+                  }}
+                >
                   Voltar
                 </button>
                 <button

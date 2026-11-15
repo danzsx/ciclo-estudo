@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   ATLAS_CATALOG,
+  ATLAS_COLLECTIONS,
   addSubject,
   createEmptyData,
   daySummary,
   deleteHistoryRecord,
   finishSession,
+  getCollectionProgress,
   parseData,
   queryAtlasCards,
   reconcileAtlas,
@@ -266,6 +268,50 @@ describe("ATLAS — Sistema de Conquistas e Coleção", () => {
     expect(sumApr10.totalMinutes).toBe(50);
     expect(sumApr10.sessionsCount).toBe(2);
     expect(sumApr10.subjects.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("11. bestiário: todas as cartas têm metadados completos de verso e coleções temáticas", () => {
+    for (const def of ATLAS_CATALOG) {
+      expect(def.habitat.trim().length).toBeGreaterThan(5);
+      expect(def.characteristics.trim().length).toBeGreaterThan(5);
+      expect(def.collections.length).toBeGreaterThanOrEqual(1);
+    }
+
+    for (const col of ATLAS_COLLECTIONS) {
+      const cardsInCol = queryAtlasCards([], { collection: col.id });
+      expect(cardsInCol.length).toBeGreaterThan(1);
+    }
+  });
+
+  it("12. progresso de coleção temática e desbloqueio de selo sem duplicidade", () => {
+    const { ctx } = makeCtx("2026-04-10T10:00:00.000Z");
+    const d = setupStudyData(ctx);
+
+    const emptyProgress = getCollectionProgress(d.atlas.unlocked);
+    expect(emptyProgress).toHaveLength(ATLAS_COLLECTIONS.length);
+    expect(emptyProgress.every((p) => p.unlocked === 0 && !p.completed)).toBe(true);
+
+    // Simula todas as cartas da coleção "mata-atlantica" como desbloqueadas via histórico suficiente
+    const mataMembers = ATLAS_CATALOG.filter(
+      (def) => !def.id.startsWith("album-") && def.collections.includes("mata-atlantica"),
+    );
+    const unlockedSim = mataMembers.map((def, idx) => ({
+      id: def.id,
+      unlockedAt: `2026-04-${String(10 + idx).padStart(2, "0")}T12:00:00.000Z`,
+      collectionId: def.collectionId,
+    }));
+
+    const progress = getCollectionProgress(unlockedSim);
+    const mataProgress = progress.find((p) => p.collection.id === "mata-atlantica");
+    expect(mataProgress?.completed).toBe(true);
+    expect(mataProgress?.pct).toBe(100);
+    expect(mataProgress?.unlocked).toBe(mataMembers.length);
+
+    // Reconciliação com histórico real suficiente para constancy-1d não duplica conquistas
+    let realData = unwrap(finishSession(d, { studiedMinutes: 30 }, ctx));
+    realData = reconcileAtlas(realData, ctx.now);
+    realData = reconcileAtlas(realData, ctx.now);
+    expect(realData.atlas.unlocked.filter((u) => u.id === "constancy-1d")).toHaveLength(1);
   });
 });
 

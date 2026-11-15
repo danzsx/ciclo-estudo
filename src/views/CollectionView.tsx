@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from "react";
-import { Compass, Filter, ArrowUpDown, RotateCcw } from "lucide-react";
+import { Compass, Filter, ArrowUpDown, RotateCcw, Award, BookOpen, Layers } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import {
   ATLAS_CATALOG,
+  ATLAS_COLLECTIONS,
   CATEGORY_META,
   RARITY_META,
+  getCollectionProgress,
   queryAtlasCards,
   type AchievementCategory,
   type AchievementDefinition,
@@ -15,6 +17,7 @@ import {
 } from "../core";
 import { AtlasCard, RARITY_STYLES } from "../components/AtlasCard";
 import { AtlasCardModal } from "../components/AtlasCardModal";
+import { soundEngine } from "../audio";
 
 const CATEGORY_ORDER: AchievementCategory[] = ["constancy", "dedication", "cycles", "special"];
 const RARITY_ORDER: AchievementRarity[] = ["common", "uncommon", "rare", "epic", "legendary"];
@@ -22,6 +25,8 @@ const RARITY_ORDER: AchievementRarity[] = ["common", "uncommon", "rare", "epic",
 export const CollectionView: React.FC = () => {
   const { data, searchQuery } = useApp();
 
+  const [viewMode, setViewMode] = useState<"biomes" | "categories">("biomes");
+  const [collectionFilter, setCollectionFilter] = useState<string | "all">("all");
   const [categoryFilter, setCategoryFilter] = useState<AchievementCategory | "all">("all");
   const [rarityFilter, setRarityFilter] = useState<AchievementRarity | "all">("all");
   const [statusFilter, setStatusFilter] = useState<AtlasStatusFilter>("all");
@@ -37,21 +42,40 @@ export const CollectionView: React.FC = () => {
   const completionPct = totalCount > 0 ? Math.round((unlockedCount / totalCount) * 100) : 0;
 
   const unlockedSet = useMemo(() => new Set(unlockedList.map((u) => u.id)), [unlockedList]);
+  const collectionProgress = useMemo(() => getCollectionProgress(unlockedList), [unlockedList]);
 
   const filteredCards = useMemo(
     () =>
       queryAtlasCards(unlockedList, {
         category: categoryFilter,
+        collection: collectionFilter,
         rarity: rarityFilter,
         status: statusFilter,
         sortBy,
         search: searchQuery,
       }),
-    [unlockedList, categoryFilter, rarityFilter, statusFilter, sortBy, searchQuery],
+    [unlockedList, categoryFilter, collectionFilter, rarityFilter, statusFilter, sortBy, searchQuery],
   );
 
+  const groupedByBiome = useMemo(() => {
+    if (viewMode !== "biomes" || collectionFilter !== "all" || categoryFilter !== "all" || sortBy !== "id") {
+      return null;
+    }
+    return collectionProgress
+      .map((prog) => {
+        const items = filteredCards.filter((c) =>
+          c.definition.collections.includes(prog.collection.id),
+        );
+        return {
+          ...prog,
+          items,
+        };
+      })
+      .filter((g) => g.items.length > 0);
+  }, [viewMode, collectionFilter, categoryFilter, sortBy, collectionProgress, filteredCards]);
+
   const groupedByCategory = useMemo(() => {
-    if (categoryFilter !== "all" || sortBy !== "id") return null;
+    if (viewMode !== "categories" || categoryFilter !== "all" || sortBy !== "id") return null;
     return CATEGORY_ORDER.map((cat) => {
       const items = filteredCards.filter((c) => c.definition.category === cat);
       const totalInCategory = ATLAS_CATALOG.filter((d) => d.category === cat).length;
@@ -66,16 +90,27 @@ export const CollectionView: React.FC = () => {
         unlockedInCategory,
       };
     }).filter((g) => g.items.length > 0);
-  }, [categoryFilter, sortBy, filteredCards, unlockedSet]);
+  }, [viewMode, categoryFilter, sortBy, filteredCards, unlockedSet]);
 
   const hasActiveFilters =
-    categoryFilter !== "all" || rarityFilter !== "all" || statusFilter !== "all" || sortBy !== "id";
+    collectionFilter !== "all" ||
+    categoryFilter !== "all" ||
+    rarityFilter !== "all" ||
+    statusFilter !== "all" ||
+    sortBy !== "id";
 
   const resetFilters = () => {
+    setCollectionFilter("all");
     setCategoryFilter("all");
     setRarityFilter("all");
     setStatusFilter("all");
     setSortBy("id");
+    void soundEngine.play("ui-select");
+  };
+
+  const handleSelectCard = (definition: AchievementDefinition, unlocked?: UnlockedAchievement) => {
+    setSelectedCard({ definition, unlocked });
+    void soundEngine.play("atlas-card-detail");
   };
 
   return (
@@ -210,6 +245,171 @@ export const CollectionView: React.FC = () => {
         </div>
       </div>
 
+      {/* Thematic Bestiary Collections Strip */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+            <BookOpen size={15} style={{ color: "var(--brand-sage-dark)" }} />
+            <span style={{ fontSize: "0.84rem", fontWeight: 700, color: "var(--text-primary)" }}>
+              Álbum do Bestiário · Coleções Temáticas & Biomas
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: "inline-flex",
+              padding: "0.2rem",
+              borderRadius: "var(--radius-full)",
+              backgroundColor: "var(--bg-surface-subtle)",
+              border: "1px solid var(--border-subtle)",
+              gap: "0.2rem",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode("biomes");
+                void soundEngine.play("ui-tab");
+              }}
+              style={{
+                padding: "0.28rem 0.72rem",
+                borderRadius: "var(--radius-full)",
+                fontSize: "0.74rem",
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+                backgroundColor: viewMode === "biomes" ? "var(--bg-surface)" : "transparent",
+                color: viewMode === "biomes" ? "var(--text-primary)" : "var(--text-muted)",
+                boxShadow: viewMode === "biomes" ? "var(--shadow-sm)" : "none",
+              }}
+            >
+              Por Biomas
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode("categories");
+                void soundEngine.play("ui-tab");
+              }}
+              style={{
+                padding: "0.28rem 0.72rem",
+                borderRadius: "var(--radius-full)",
+                fontSize: "0.74rem",
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+                backgroundColor: viewMode === "categories" ? "var(--bg-surface)" : "transparent",
+                color: viewMode === "categories" ? "var(--text-primary)" : "var(--text-muted)",
+                boxShadow: viewMode === "categories" ? "var(--shadow-sm)" : "none",
+              }}
+            >
+              Por Categorias
+            </button>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(195px, 1fr))",
+            gap: "0.75rem",
+          }}
+        >
+          {collectionProgress.map((prog) => {
+            const isSelected = collectionFilter === prog.collection.id;
+            return (
+              <button
+                key={prog.collection.id}
+                type="button"
+                onClick={() => {
+                  setCollectionFilter((prev) =>
+                    prev === prog.collection.id ? "all" : prog.collection.id,
+                  );
+                  void soundEngine.play("ui-select");
+                }}
+                className="editorial-card"
+                style={{
+                  textAlign: "left",
+                  padding: "0.85rem 0.95rem",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.5rem",
+                  cursor: "pointer",
+                  border: isSelected
+                    ? `1.5px solid ${prog.collection.accent}`
+                    : prog.completed
+                      ? "1px solid rgba(115, 186, 155, 0.55)"
+                      : "1px solid var(--border-subtle)",
+                  backgroundColor: isSelected ? "var(--bg-surface-subtle)" : "var(--bg-surface)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.4rem" }}>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                    {prog.collection.name}
+                  </span>
+                  {prog.completed && (
+                    <span
+                      title="Coleção temática completa — Selo conquistado"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.2rem",
+                        fontSize: "0.62rem",
+                        fontWeight: 700,
+                        padding: "0.1rem 0.42rem",
+                        borderRadius: "var(--radius-full)",
+                        backgroundColor: "rgba(115, 186, 155, 0.16)",
+                        color: "var(--brand-sage-dark)",
+                        border: "1px solid rgba(115, 186, 155, 0.4)",
+                      }}
+                    >
+                      <Award size={10} />
+                      Completa
+                    </span>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    height: 6,
+                    width: "100%",
+                    borderRadius: 999,
+                    backgroundColor: "var(--bg-surface-subtle)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: `${prog.pct}%`,
+                      height: "100%",
+                      backgroundColor: prog.collection.accent,
+                      transition: "width 0.3s ease",
+                    }}
+                  />
+                </div>
+
+                <div
+                  className="tabular-nums"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    fontSize: "0.72rem",
+                    color: "var(--text-muted)",
+                    fontWeight: 600,
+                  }}
+                >
+                  <span>
+                    {prog.unlocked}/{prog.total} espécies
+                  </span>
+                  <span>{prog.pct}%</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Filters & Sorting Toolbar */}
       <div
         className="editorial-card"
@@ -239,10 +439,31 @@ export const CollectionView: React.FC = () => {
           </span>
 
           <select
+            aria-label="Filtrar por bioma ou coleção"
+            value={collectionFilter}
+            onChange={(e) => {
+              setCollectionFilter(e.target.value);
+              void soundEngine.play("ui-select");
+            }}
+            className="select"
+            style={{ width: "auto", padding: "0.42rem 0.75rem", fontSize: "0.8rem" }}
+          >
+            <option value="all">Todos os biomas</option>
+            {ATLAS_COLLECTIONS.map((col) => (
+              <option key={col.id} value={col.id}>
+                {col.name}
+              </option>
+            ))}
+          </select>
+
+          <select
             aria-label="Filtrar por categoria"
             value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value as AchievementCategory | "all")}
-            className="input-field"
+            onChange={(e) => {
+              setCategoryFilter(e.target.value as AchievementCategory | "all");
+              void soundEngine.play("ui-select");
+            }}
+            className="select"
             style={{ width: "auto", padding: "0.42rem 0.75rem", fontSize: "0.8rem" }}
           >
             <option value="all">Todas as categorias</option>
@@ -256,8 +477,11 @@ export const CollectionView: React.FC = () => {
           <select
             aria-label="Filtrar por raridade"
             value={rarityFilter}
-            onChange={(e) => setRarityFilter(e.target.value as AchievementRarity | "all")}
-            className="input-field"
+            onChange={(e) => {
+              setRarityFilter(e.target.value as AchievementRarity | "all");
+              void soundEngine.play("ui-select");
+            }}
+            className="select"
             style={{ width: "auto", padding: "0.42rem 0.75rem", fontSize: "0.8rem" }}
           >
             <option value="all">Todas as raridades</option>
@@ -271,8 +495,11 @@ export const CollectionView: React.FC = () => {
           <select
             aria-label="Filtrar por estado"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as AtlasStatusFilter)}
-            className="input-field"
+            onChange={(e) => {
+              setStatusFilter(e.target.value as AtlasStatusFilter);
+              void soundEngine.play("ui-select");
+            }}
+            className="select"
             style={{ width: "auto", padding: "0.42rem 0.75rem", fontSize: "0.8rem" }}
           >
             <option value="all">Todos os estados</option>
@@ -298,8 +525,11 @@ export const CollectionView: React.FC = () => {
           <select
             aria-label="Ordenar cartas"
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as AtlasSortBy)}
-            className="input-field"
+            onChange={(e) => {
+              setSortBy(e.target.value as AtlasSortBy);
+              void soundEngine.play("ui-select");
+            }}
+            className="select"
             style={{ width: "auto", padding: "0.42rem 0.75rem", fontSize: "0.8rem" }}
           >
             <option value="id">Ordem de identificação</option>
@@ -333,6 +563,89 @@ export const CollectionView: React.FC = () => {
           }}
         >
           Nenhuma carta encontrada para os filtros selecionados.
+        </div>
+      ) : groupedByBiome ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "2.25rem" }}>
+          {groupedByBiome.map((group) => (
+            <section key={group.collection.id} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "0.75rem",
+                  borderBottom: "1px solid var(--border-subtle)",
+                  paddingBottom: "0.6rem",
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <Layers size={15} style={{ color: group.collection.accent }} />
+                    <h2 style={{ fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.02em" }}>
+                      {group.collection.name}
+                    </h2>
+                    {group.completed && (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.24rem",
+                          fontSize: "0.66rem",
+                          fontWeight: 700,
+                          padding: "0.14rem 0.5rem",
+                          borderRadius: "var(--radius-full)",
+                          backgroundColor: "rgba(115, 186, 155, 0.16)",
+                          color: "var(--brand-sage-dark)",
+                          border: "1px solid rgba(115, 186, 155, 0.4)",
+                        }}
+                      >
+                        <Award size={11} />
+                        Coleção Completa
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: "0.15rem" }}>
+                    {group.collection.subtitle}
+                  </p>
+                </div>
+
+                <div className="tabular-nums" style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <div
+                    style={{
+                      width: 96,
+                      height: 6,
+                      borderRadius: 999,
+                      backgroundColor: "var(--bg-surface-subtle)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${group.pct}%`,
+                        height: "100%",
+                        backgroundColor: group.collection.accent,
+                      }}
+                    />
+                  </div>
+                  <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-muted)" }}>
+                    {group.unlocked}/{group.total} ({group.pct}%)
+                  </span>
+                </div>
+              </div>
+
+              <div className="atlas-grid">
+                {group.items.map(({ definition, unlocked }) => (
+                  <AtlasCard
+                    key={`${group.collection.id}-${definition.id}`}
+                    definition={definition}
+                    unlocked={unlocked}
+                    onSelect={handleSelectCard}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
         </div>
       ) : groupedByCategory ? (
         <div style={{ display: "flex", flexDirection: "column", gap: "2.25rem" }}>
@@ -368,7 +681,7 @@ export const CollectionView: React.FC = () => {
                     key={definition.id}
                     definition={definition}
                     unlocked={unlocked}
-                    onSelect={(def, unl) => setSelectedCard({ definition: def, unlocked: unl })}
+                    onSelect={handleSelectCard}
                   />
                 ))}
               </div>
@@ -382,7 +695,7 @@ export const CollectionView: React.FC = () => {
               key={definition.id}
               definition={definition}
               unlocked={unlocked}
-              onSelect={(def, unl) => setSelectedCard({ definition: def, unlocked: unl })}
+              onSelect={handleSelectCard}
             />
           ))}
         </div>
@@ -392,7 +705,10 @@ export const CollectionView: React.FC = () => {
         <AtlasCardModal
           definition={selectedCard.definition}
           unlocked={selectedCard.unlocked}
-          onClose={() => setSelectedCard(null)}
+          onClose={() => {
+            setSelectedCard(null);
+            void soundEngine.play("ui-modal-close");
+          }}
         />
       )}
     </div>

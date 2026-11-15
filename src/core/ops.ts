@@ -5,12 +5,30 @@
  * (ou erros de validação). Data/hora e geração de IDs são injetadas via `Ctx`,
  * o que torna tudo testável e independente de plataforma.
  */
-import { LIMITS, SUBJECT_COLORS, createEmptyData } from "./defaults";
+import { DEFAULT_SETTINGS, LIMITS, SUBJECT_COLORS, createEmptyData } from "./defaults";
 import { reconcileAtlas } from "./atlas";
 import { computePlan } from "./distribution";
 import { elapsedMs, heartbeat, pauseTimer, resumeTimer } from "./timer";
-import { validateSettings, validateStudiedMinutes, validateSubjectInput, type SubjectInput } from "./validation";
-import type { ActiveSession, AppData, CycleSettings, Preferences, Result, SessionRecord, SessionStatus, Subject } from "./types";
+import {
+  validateCourseInput,
+  validateSettings,
+  validateStudiedMinutes,
+  validateSubjectInput,
+  type CourseInput,
+  type SubjectInput,
+} from "./validation";
+import type {
+  ActiveSession,
+  AppData,
+  Course,
+  CycleSettings,
+  CycleState,
+  Preferences,
+  Result,
+  SessionRecord,
+  SessionStatus,
+  Subject,
+} from "./types";
 
 export interface Ctx {
   now: Date;
@@ -21,13 +39,157 @@ function touch(data: AppData, now: Date): AppData {
   return { ...data, meta: { ...data.meta, updatedAt: now.toISOString() } };
 }
 
+export function getActiveCourse(data: AppData): Course | undefined {
+  return data.courses?.find((c) => c.id === data.activeCourseId) ?? data.courses?.[0];
+}
+
+function withActiveCourseSync(data: AppData, updatedAt?: string): AppData {
+  if (!data.courses || data.courses.length === 0) return data;
+  const idx = data.courses.findIndex((c) => c.id === data.activeCourseId);
+  const targetIdx = idx >= 0 ? idx : 0;
+  const current = data.courses[targetIdx];
+  const updatedCourse: Course = {
+    ...current,
+    subjects: data.subjects,
+    settings: data.settings,
+    cycle: data.cycle,
+    updatedAt: updatedAt ?? current.updatedAt,
+  };
+  const courses = data.courses.map((c, i) => (i === targetIdx ? updatedCourse : c));
+  return { ...data, activeCourseId: updatedCourse.id, courses };
+}
+
 /** Recalcula o plano se as entradas mudaram, preservando o ponto do ciclo. */
 export function syncPlan(data: AppData): AppData {
   const plan = computePlan(data.subjects, data.settings);
-  if (data.cycle.plan && data.cycle.plan.signature === plan.signature) return data;
+  if (data.cycle.plan && data.cycle.plan.signature === plan.signature) {
+    return withActiveCourseSync(data);
+  }
   const len = plan.blocks.length;
   const position = len === 0 ? 0 : Math.min(Math.max(0, data.cycle.position), len - 1);
-  return { ...data, cycle: { ...data.cycle, plan, position } };
+  return withActiveCourseSync({ ...data, cycle: { ...data.cycle, plan, position } });
+}
+
+export function nextCourseColor(courses: Course[]): string {
+  const used = new Map<string, number>();
+  for (const c of courses) used.set(c.color, (used.get(c.color) ?? 0) + 1);
+  let best = SUBJECT_COLORS[0];
+  let bestCount = Infinity;
+  for (const c of SUBJECT_COLORS) {
+    const count = used.get(c) ?? 0;
+    if (count < bestCount) {
+      best = c;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------- Cursos
+
+export function addCourse(
+  data: AppData,
+  input: CourseInput,
+  ctx: Ctx,
+  opts: { select?: boolean } = {},
+): Result<AppData> {
+  if (data.courses.length >= LIMITS.maxCourses) {
+    return { ok: false, errors: { name: `Limite de ${LIMITS.maxCourses} cursos atingido.` } };
+  }
+  const valid = validateCourseInput(
+    input,
+    data.courses.map((c) => c.name),
+  );
+  if (!valid.ok) return valid;
+  const synced = withActiveCourseSync(data);
+  const iso = ctx.now.toISOString();
+  const course: Course = {
+    id: ctx.newId(),
+    name: valid.value.name,
+    color: valid.value.color ?? nextCourseColor(synced.courses),
+    subjects: [],
+    settings: { ...DEFAULT_SETTINGS },
+    cycle: { plan: null, position: 0, cycleNumber: 1, completedCycles: 0 },
+    createdAt: iso,
+    updatedAt: iso,
+  };
+  const courses = [...synced.courses, course];
+  const shouldSelect = opts.select ?? true;
+  if (shouldSelect) {
+    const next: AppData = {
+      ...synced,
+      courses,
+      activeCourseId: course.id,
+      subjects: course.subjects,
+      settings: course.settings,
+      cycle: course.cycle,
+    };
+    return { ok: true, value: syncPlan(touch(next, ctx.now)) };
+  }
+  return { ok: true, value: touch({ ...synced, courses }, ctx.now) };
+}
+
+export function updateCourse(data: AppData, id: string, input: CourseInput, ctx: Pick<Ctx, "now">): Result<AppData> {
+  const current = data.courses.find((c) => c.id === id);
+  if (!current) return { ok: false, errors: { name: "Curso não encontrado." } };
+  const valid = validateCourseInput(
+    input,
+    data.courses.filter((c) => c.id !== id).map((c) => c.name),
+  );
+  if (!valid.ok) return valid;
+  const iso = ctx.now.toISOString();
+  const updated: Course = {
+    ...current,
+    name: valid.value.name,
+    color: valid.value.color ?? current.color,
+    updatedAt: iso,
+  };
+  const courses = data.courses.map((c) => (c.id === id ? updated : c));
+  let next: AppData = { ...data, courses };
+  if (next.activeSession?.courseId === id) {
+    next = { ...next, activeSession: { ...next.activeSession, courseName: updated.name } };
+  }
+  return { ok: true, value: touch(next, ctx.now) };
+}
+
+export function selectCourse(data: AppData, id: string, ctx?: Pick<Ctx, "now">): AppData {
+  if (data.activeCourseId === id) return data;
+  const synced = withActiveCourseSync(data);
+  const target = synced.courses.find((c) => c.id === id);
+  if (!target) return synced;
+  const next: AppData = {
+    ...synced,
+    activeCourseId: target.id,
+    subjects: target.subjects,
+    settings: target.settings,
+    cycle: target.cycle,
+  };
+  const result = syncPlan(next);
+  return ctx ? touch(result, ctx.now) : result;
+}
+
+export function deleteCourse(data: AppData, id: string, ctx: Pick<Ctx, "now">): Result<AppData> {
+  if (data.courses.length <= 1) {
+    return { ok: false, errors: { course: "Você precisa manter pelo menos um curso." } };
+  }
+  if (!data.courses.some((c) => c.id === id)) {
+    return { ok: false, errors: { course: "Curso não encontrado." } };
+  }
+  const synced = withActiveCourseSync(data);
+  const remaining = synced.courses.filter((c) => c.id !== id);
+  const nextActive =
+    synced.activeCourseId === id ? remaining[0] : remaining.find((c) => c.id === synced.activeCourseId) ?? remaining[0];
+  const activeSession = synced.activeSession?.courseId === id ? null : synced.activeSession;
+  const next: AppData = {
+    ...synced,
+    courses: remaining,
+    activeCourseId: nextActive.id,
+    subjects: nextActive.subjects,
+    settings: nextActive.settings,
+    cycle: nextActive.cycle,
+    activeSession,
+  };
+  return { ok: true, value: syncPlan(touch(next, ctx.now)) };
 }
 
 export function nextColor(subjects: Subject[]): string {
@@ -144,36 +306,39 @@ export function upcomingBlocks(data: AppData, count: number) {
   return out;
 }
 
+function advanceCycleState(cycle: CycleState): CycleState {
+  const len = cycle.plan?.blocks.length ?? 0;
+  if (len === 0) return cycle;
+  const nextPos = cycle.position + 1;
+  if (nextPos >= len) {
+    return {
+      ...cycle,
+      position: 0,
+      cycleNumber: cycle.cycleNumber + 1,
+      completedCycles: cycle.completedCycles + 1,
+    };
+  }
+  return { ...cycle, position: nextPos };
+}
+
 /** Avança para o próximo bloco; após o último, recomeça pelo primeiro (novo ciclo). */
 export function advance(data: AppData): AppData {
   const len = data.cycle.plan?.blocks.length ?? 0;
   if (len === 0) return data;
-  const nextPos = data.cycle.position + 1;
-  if (nextPos >= len) {
-    return {
-      ...data,
-      cycle: {
-        ...data.cycle,
-        position: 0,
-        cycleNumber: data.cycle.cycleNumber + 1,
-        completedCycles: data.cycle.completedCycles + 1,
-      },
-    };
-  }
-  return { ...data, cycle: { ...data.cycle, position: nextPos } };
+  return withActiveCourseSync({ ...data, cycle: advanceCycleState(data.cycle) });
 }
 
 /** Escolhe manualmente o próximo bloco do ciclo atual. */
 export function jumpTo(data: AppData, index: number, ctx: Pick<Ctx, "now">): AppData {
   const len = data.cycle.plan?.blocks.length ?? 0;
   if (data.activeSession || index < 0 || index >= len) return data;
-  return touch({ ...data, cycle: { ...data.cycle, position: index } }, ctx.now);
+  return withActiveCourseSync(touch({ ...data, cycle: { ...data.cycle, position: index } }, ctx.now), ctx.now.toISOString());
 }
 
 /** Recomeça o ciclo atual do primeiro bloco (sem apagar histórico). */
 export function restartCycle(data: AppData, ctx: Pick<Ctx, "now">): AppData {
   if (data.activeSession) return data;
-  return touch({ ...data, cycle: { ...data.cycle, position: 0 } }, ctx.now);
+  return withActiveCourseSync(touch({ ...data, cycle: { ...data.cycle, position: 0 } }, ctx.now), ctx.now.toISOString());
 }
 
 // ---------------------------------------------------------------- Sessões
@@ -184,10 +349,12 @@ export function startSession(data: AppData, ctx: Ctx, opts: { running?: boolean 
   if (!block) return data;
   const subject = data.subjects.find((s) => s.id === block.subjectId);
   if (!subject) return data;
+  const course = getActiveCourse(data);
   const nowMs = ctx.now.getTime();
   const running = opts.running ?? true;
   const session: ActiveSession = {
     id: ctx.newId(),
+    ...(course ? { courseId: course.id, courseName: course.name } : {}),
     subjectId: subject.id,
     subjectName: subject.name,
     blockIndex: block.index,
@@ -250,12 +417,17 @@ export function finishSession(data: AppData, input: FinishInput, ctx: Ctx): Resu
   const active = data.activeSession;
   if (!active && !block) return { ok: false, errors: { studiedMinutes: "Não há sessão para concluir." } };
 
+  const activeCourse = getActiveCourse(data);
+  const targetCourseId = active?.courseId ?? activeCourse?.id;
+  const targetCourse = data.courses?.find((c) => c.id === targetCourseId) ?? activeCourse;
   const subjectId = active?.subjectId ?? block!.subjectId;
-  const subject = data.subjects.find((s) => s.id === subjectId);
+  const allSubjects = data.courses?.length ? data.courses.flatMap((c) => c.subjects) : data.subjects;
+  const subject = allSubjects.find((s) => s.id === subjectId);
   const studied = Math.round(input.studiedMinutes * 100) / 100;
   const planned = active?.plannedMinutes ?? block!.minutes;
   const record: SessionRecord = {
     id: ctx.newId(),
+    ...(targetCourse ? { courseId: targetCourse.id, courseName: active?.courseName ?? targetCourse.name } : {}),
     subjectId,
     subjectName: subject?.name ?? active?.subjectName ?? "Disciplina removida",
     subjectColor: subject?.color ?? "#8A8F98",
@@ -268,7 +440,19 @@ export function finishSession(data: AppData, input: FinishInput, ctx: Ctx): Resu
     status: sessionStatusFor(studied, planned),
     notes: (input.notes ?? active?.notes ?? "").trim().slice(0, LIMITS.notesMax),
   };
-  const next = advance({ ...data, activeSession: null, history: [record, ...data.history] });
+
+  let next: AppData = { ...data, activeSession: null, history: [record, ...data.history] };
+  if (targetCourse && targetCourse.id !== data.activeCourseId) {
+    const advancedCycle = advanceCycleState(targetCourse.cycle);
+    next = {
+      ...next,
+      courses: next.courses.map((c) =>
+        c.id === targetCourse.id ? { ...c, cycle: advancedCycle, updatedAt: ctx.now.toISOString() } : c,
+      ),
+    };
+  } else {
+    next = advance(next);
+  }
   return { ok: true, value: reconcileAtlas(touch(next, ctx.now), ctx.now) };
 }
 

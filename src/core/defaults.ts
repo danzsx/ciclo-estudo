@@ -1,6 +1,8 @@
-import type { AppData, CycleSettings, Difficulty, Preferences } from "./types";
+import type { AppData, Course, CycleSettings, Difficulty, Preferences, SoundPreferences } from "./types";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+export const DEFAULT_COURSE_NAME = "Curso Principal";
 
 export const DIFFICULTY_FACTORS: Record<Difficulty, number> = {
   easy: 0.85,
@@ -25,6 +27,8 @@ export const WEIGHT_LABELS: Record<number, string> = {
 /** Limites de validação. */
 export const LIMITS = {
   nameMax: 60,
+  courseNameMax: 60,
+  maxCourses: 20,
   weightMin: 1,
   weightMax: 5,
   sessionMin: 15,
@@ -47,8 +51,17 @@ export const DEFAULT_SETTINGS: CycleSettings = {
   minBlockMinutes: 25,
 };
 
+export const DEFAULT_SOUND_PREFERENCES: SoundPreferences = {
+  masterVolume: 0.7,
+  uiEnabled: true,
+  sessionEnabled: true,
+  timerEnabled: true,
+  achievementEnabled: true,
+};
+
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: "system",
+  sound: { ...DEFAULT_SOUND_PREFERENCES },
 };
 
 export const DEFAULT_SUBJECT = {
@@ -73,14 +86,36 @@ export const SUBJECT_COLORS = [
   "#4c3f91",
 ];
 
-export function createEmptyData(now: Date = new Date()): AppData {
+export function createDefaultCourse(
+  now: Date = new Date(),
+  id = "default",
+  name = DEFAULT_COURSE_NAME,
+  color = SUBJECT_COLORS[0],
+): Course {
   const iso = now.toISOString();
   return {
-    schemaVersion: SCHEMA_VERSION,
+    id,
+    name,
+    color,
     subjects: [],
     settings: { ...DEFAULT_SETTINGS },
-    preferences: { ...DEFAULT_PREFERENCES },
     cycle: { plan: null, position: 0, cycleNumber: 1, completedCycles: 0 },
+    createdAt: iso,
+    updatedAt: iso,
+  };
+}
+
+export function createEmptyData(now: Date = new Date()): AppData {
+  const iso = now.toISOString();
+  const defaultCourse = createDefaultCourse(now);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    courses: [defaultCourse],
+    activeCourseId: defaultCourse.id,
+    subjects: defaultCourse.subjects,
+    settings: { ...defaultCourse.settings },
+    preferences: { ...DEFAULT_PREFERENCES },
+    cycle: { ...defaultCourse.cycle },
     activeSession: null,
     history: [],
     atlas: { unlocked: [], retroactiveCheckedAt: null },

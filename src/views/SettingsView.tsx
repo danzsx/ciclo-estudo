@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Moon,
   Sun,
@@ -12,15 +12,21 @@ import {
   Sliders,
   Database,
   Palette,
+  Volume2,
+  VolumeX,
+  Play,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { formatMinutes, type CycleSettings } from "../core";
+import { DEFAULT_SOUND_PREFERENCES, formatMinutes, type CycleSettings, type SoundPreferences } from "../core";
+import { rarityToRevealSoundId, soundEngine, type SoundId } from "../audio";
 
 export const SettingsView: React.FC = () => {
   const {
     data,
+    activeCourse,
     handleUpdateSettings,
     handleUpdateTheme,
+    handleUpdateSoundPreferences,
     handleExportBackup,
     handleImportBackup,
     handleOpenDataFolder,
@@ -39,6 +45,28 @@ export const SettingsView: React.FC = () => {
   const [settingsErrors, setSettingsErrors] = useState<Record<string, string>>({});
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
+
+  const soundPrefs: SoundPreferences = data.preferences.sound ?? DEFAULT_SOUND_PREFERENCES;
+  const volumePct = Math.round(soundPrefs.masterVolume * 100);
+
+  const previewSound = (id: SoundId) => {
+    void soundEngine.play(id, { ignoreCategoryToggle: true });
+  };
+
+  const toggleSoundCategory = (key: "uiEnabled" | "sessionEnabled" | "timerEnabled" | "achievementEnabled") => {
+    const next = !soundPrefs[key];
+    handleUpdateSoundPreferences({ [key]: next });
+    if (next) {
+      void soundEngine.play("ui-select", { ignoreCategoryToggle: true });
+    }
+  };
+
+  useEffect(() => {
+    setCycleHours(data.settings.cycleMinutes / 60);
+    setSessionMinutes(data.settings.sessionMinutes);
+    setMinBlockMinutes(data.settings.minBlockMinutes);
+    setSettingsErrors({});
+  }, [data.activeCourseId, data.settings.cycleMinutes, data.settings.sessionMinutes, data.settings.minBlockMinutes]);
 
   const saveSettings = (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,7 +124,7 @@ export const SettingsView: React.FC = () => {
           </span>
         </h1>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginTop: "0.2rem" }}>
-          Configure limites operacionais do ciclo, superfície cromática e persistência de dados locais.
+          Configure limites operacionais do ciclo ({activeCourse?.name ?? "Curso"}), superfície cromática e persistência de dados locais.
         </p>
       </div>
 
@@ -271,6 +299,212 @@ export const SettingsView: React.FC = () => {
             <Laptop size={16} />
             <span>Automático (Sistema)</span>
           </button>
+        </div>
+      </div>
+
+      {/* Sound Design & Audio Preferences */}
+      <div className="editorial-card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem", marginBottom: "1.25rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+            <div
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 12,
+                backgroundColor: "var(--brand-sage-subtle)",
+                color: "var(--brand-sage-dark)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {volumePct === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            </div>
+            <div>
+              <h3 style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                Identidade <span className="serif-accent" style={{ fontSize: "1.2rem" }}>Sonora</span>
+              </h3>
+              <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                Texturas mecânicas e acústicas discretas; nenhuma função depende de áudio
+              </span>
+            </div>
+          </div>
+
+          <span
+            className="tabular-nums"
+            style={{
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              padding: "0.3rem 0.75rem",
+              borderRadius: "var(--radius-full)",
+              backgroundColor: "var(--bg-surface-subtle)",
+              color: volumePct === 0 ? "var(--text-muted)" : "var(--text-primary)",
+              border: "1px solid var(--border-subtle)",
+            }}
+          >
+            Volume {volumePct}%
+          </span>
+        </div>
+
+        {/* Master Volume Slider */}
+        <div
+          style={{
+            padding: "0.95rem 1.1rem",
+            borderRadius: "var(--radius-md)",
+            backgroundColor: "var(--bg-surface-subtle)",
+            border: "1px solid var(--border-subtle)",
+            marginBottom: "1.1rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.55rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+            <label htmlFor="atlas-master-volume" style={{ fontSize: "0.84rem", fontWeight: 600, color: "var(--text-primary)" }}>
+              Volume Geral
+            </label>
+            {volumePct === 0 && (
+              <span style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                Áudio silenciado — aumente o volume para ouvir prévias
+              </span>
+            )}
+          </div>
+          <input
+            id="atlas-master-volume"
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={volumePct}
+            aria-label="Volume geral"
+            onChange={(e) => handleUpdateSoundPreferences({ masterVolume: Number(e.target.value) / 100 })}
+            style={{ width: "100%", accentColor: "#73ba9b", cursor: "pointer" }}
+          />
+        </div>
+
+        {/* Category Toggles + Preview Buttons */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.85rem" }}>
+          {(
+            [
+              {
+                key: "uiEnabled" as const,
+                title: "Sons da interface",
+                desc: "Abas, modais, filtros e confirmações.",
+                previewId: "ui-confirm" as SoundId,
+              },
+              {
+                key: "sessionEnabled" as const,
+                title: "Sons das sessões",
+                desc: "Início, pausa, retomada, conclusão e cancelamento.",
+                previewId: "session-complete" as SoundId,
+              },
+              {
+                key: "timerEnabled" as const,
+                title: "Sons do timer",
+                desc: "Marcação de início/pausa e aviso sereno de meta.",
+                previewId: "timer-complete" as SoundId,
+              },
+              {
+                key: "achievementEnabled" as const,
+                title: "Sons das conquistas",
+                desc: "Coleção ATLAS, desbloqueios e revelação de cartas.",
+                previewId: "atlas-unlock" as SoundId,
+              },
+            ] as const
+          ).map((item) => {
+            const enabled = soundPrefs[item.key];
+            return (
+              <div
+                key={item.key}
+                style={{
+                  padding: "0.95rem 1.05rem",
+                  borderRadius: "var(--radius-md)",
+                  border: `1px solid ${enabled ? "var(--border-strong)" : "var(--border-subtle)"}`,
+                  backgroundColor: "var(--bg-surface)",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
+                  <div>
+                    <div style={{ fontSize: "0.86rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                      {item.title}
+                    </div>
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "0.18rem", lineHeight: 1.4 }}>
+                      {item.desc}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enabled}
+                    aria-label={item.title}
+                    className={`chip-pill ${enabled ? "active" : ""}`}
+                    style={{ padding: "0.3rem 0.7rem", fontSize: "0.74rem", flexShrink: 0 }}
+                    onClick={() => toggleSoundCategory(item.key)}
+                  >
+                    {enabled ? "Ativo" : "Desativado"}
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ padding: "0.32rem 0.7rem", fontSize: "0.74rem", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+                    onClick={() => previewSound(item.previewId)}
+                    disabled={volumePct === 0}
+                  >
+                    <Play size={12} />
+                    <span>Prévia</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Rarity Signature Previews */}
+        <div
+          style={{
+            marginTop: "1rem",
+            paddingTop: "0.95rem",
+            borderTop: "1px solid var(--border-subtle)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "0.65rem",
+          }}
+        >
+          <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+            Prévia das raridades ATLAS:
+          </span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+            {(
+              [
+                { rarity: "common", label: "Comum" },
+                { rarity: "uncommon", label: "Incomum" },
+                { rarity: "rare", label: "Raro" },
+                { rarity: "epic", label: "Épico" },
+                { rarity: "legendary", label: "Lendário" },
+              ] as const
+            ).map((r) => (
+              <button
+                key={r.rarity}
+                type="button"
+                className="chip-pill"
+                style={{ padding: "0.3rem 0.7rem", fontSize: "0.74rem" }}
+                onClick={() => previewSound(rarityToRevealSoundId(r.rarity))}
+                disabled={volumePct === 0}
+              >
+                <Play size={11} />
+                <span>{r.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

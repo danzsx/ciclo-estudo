@@ -1,10 +1,11 @@
 /**
  * Versionamento do esquema, migrações, normalização defensiva e backups.
  */
-import { DEFAULT_PREFERENCES, DEFAULT_SETTINGS, LIMITS, SCHEMA_VERSION, SUBJECT_COLORS, createEmptyData } from "./defaults";
+import { DEFAULT_COURSE_NAME, DEFAULT_PREFERENCES, DEFAULT_SETTINGS, DEFAULT_SOUND_PREFERENCES, LIMITS, SCHEMA_VERSION, SUBJECT_COLORS, createDefaultCourse, createEmptyData } from "./defaults";
 import { reconcileAtlas } from "./atlas";
+import { computePlan } from "./distribution";
 import { syncPlan } from "./ops";
-import type { ActiveSession, AppData, AtlasState, Difficulty, SessionRecord, Subject, UnlockedAchievement } from "./types";
+import type { ActiveSession, AppData, AtlasState, Course, CycleSettings, Difficulty, SessionRecord, Subject, UnlockedAchievement } from "./types";
 
 export class DataError extends Error {
   constructor(
@@ -29,6 +30,30 @@ export const MIGRATIONS: Record<number, Migration> = {
   0: (raw) => ({ ...raw, preferences: raw.preferences ?? { ...DEFAULT_PREFERENCES }, schemaVersion: 1 }),
   // v1 → v2: adiciona o arquivo de conquistas ATLAS.
   1: (raw) => ({ ...raw, atlas: raw.atlas ?? { unlocked: [], retroactiveCheckedAt: null }, schemaVersion: 2 }),
+  // v2 → v3: adiciona suporte a múltiplos cursos.
+  2: (raw) => {
+    if (Array.isArray(raw.courses) && raw.courses.length > 0) {
+      return { ...raw, schemaVersion: 3 };
+    }
+    const createdAt = typeof raw.meta?.createdAt === "string" ? raw.meta.createdAt : new Date().toISOString();
+    const updatedAt = typeof raw.meta?.updatedAt === "string" ? raw.meta.updatedAt : createdAt;
+    const defaultCourse = {
+      id: "default",
+      name: DEFAULT_COURSE_NAME,
+      color: SUBJECT_COLORS[0],
+      subjects: Array.isArray(raw.subjects) ? raw.subjects : [],
+      settings: raw.settings ?? { ...DEFAULT_SETTINGS },
+      cycle: raw.cycle ?? { plan: null, position: 0, cycleNumber: 1, completedCycles: 0 },
+      createdAt,
+      updatedAt,
+    };
+    return {
+      ...raw,
+      courses: [defaultCourse],
+      activeCourseId: defaultCourse.id,
+      schemaVersion: 3,
+    };
+  },
 };
 
 export function migrate(raw: Raw, migrations: Record<number, Migration> = MIGRATIONS, target = SCHEMA_VERSION) {
@@ -92,8 +117,12 @@ function normalizeRecord(raw: unknown): SessionRecord | null {
   const endedAt = str(raw.endedAt);
   if (!id || !endedAt || Number.isNaN(Date.parse(endedAt))) return null;
   const status = raw.status === "completed" || raw.status === "partial" || raw.status === "skipped" ? raw.status : "completed";
+  const courseId = str(raw.courseId).trim();
+  const courseName = str(raw.courseName).trim();
   return {
     id,
+    ...(courseId ? { courseId } : {}),
+    ...(courseName ? { courseName } : {}),
     subjectId: str(raw.subjectId),
     subjectName: str(raw.subjectName, "Disciplina"),
     subjectColor: str(raw.subjectColor, "#8A8F98"),
@@ -108,14 +137,18 @@ function normalizeRecord(raw: unknown): SessionRecord | null {
   };
 }
 
-function normalizeActive(raw: unknown, subjects: Subject[]): ActiveSession | null {
+function normalizeActive(raw: unknown, allSubjects: Subject[]): ActiveSession | null {
   if (!isObj(raw)) return null;
   const subjectId = str(raw.subjectId);
-  if (!subjects.some((s) => s.id === subjectId)) return null;
+  if (!allSubjects.some((s) => s.id === subjectId)) return null;
   const status = raw.status === "running" ? "running" : "paused";
   const lastResumedAt = typeof raw.lastResumedAt === "number" ? raw.lastResumedAt : null;
+  const courseId = str(raw.courseId).trim();
+  const courseName = str(raw.courseName).trim();
   return {
     id: str(raw.id, "restored"),
+    ...(courseId ? { courseId } : {}),
+    ...(courseName ? { courseName } : {}),
     subjectId,
     subjectName: str(raw.subjectName),
     blockIndex: Math.max(0, Math.round(num(raw.blockIndex, 0))),
@@ -153,21 +186,8 @@ function normalizeAtlas(raw: unknown): AtlasState {
   return { unlocked, retroactiveCheckedAt };
 }
 
-/** Normaliza dados (já migrados) preenchendo padrões e descartando entradas inválidas. */
-export function normalizeData(raw: Raw, now: Date = new Date()): AppData {
-  if (!isObj(raw)) throw new DataError("Formato de dados inválido.", "invalid_format");
-  const base = createEmptyData(now);
-  const nowIso = now.toISOString();
-  const seen = new Set<string>();
-  const subjects = (Array.isArray(raw.subjects) ? raw.subjects : [])
-    .map((s: unknown, i: number) => normalizeSubject(s, i, nowIso))
-    .filter((s: Subject | null): s is Subject => {
-      if (!s || seen.has(s.id)) return false;
-      seen.add(s.id);
-      return true;
-    })
-    .slice(0, LIMITS.maxSubjects);
-  const st = isObj(raw.settings) ? raw.settings : {};
+function normalizeSettings(raw: unknown): CycleSettings {
+  const st = isObj(raw) ? raw : {};
   const sessionMinutes = intIn(st.sessionMinutes, LIMITS.sessionMin, LIMITS.sessionMax, DEFAULT_SETTINGS.sessionMinutes);
   let cycleMinutes = intIn(st.cycleMinutes, LIMITS.cycleMin, LIMITS.cycleMax, DEFAULT_SETTINGS.cycleMinutes);
   cycleMinutes = Math.max(LIMITS.cycleMin, Math.round(cycleMinutes / LIMITS.granularity) * LIMITS.granularity);
@@ -175,27 +195,125 @@ export function normalizeData(raw: Raw, now: Date = new Date()): AppData {
     sessionMinutes,
     intIn(st.minBlockMinutes, LIMITS.minBlockMin, LIMITS.minBlockMax, DEFAULT_SETTINGS.minBlockMinutes),
   );
+  return { cycleMinutes, sessionMinutes, minBlockMinutes };
+}
+
+function normalizeCourse(raw: unknown, i: number, nowIso: string): Course | null {
+  if (!isObj(raw)) return null;
+  const id = str(raw.id).trim();
+  const name = str(raw.name).trim().slice(0, LIMITS.courseNameMax);
+  if (!id || !name) return null;
+  const seenSubjects = new Set<string>();
+  const subjects = (Array.isArray(raw.subjects) ? raw.subjects : [])
+    .map((s: unknown, idx: number) => normalizeSubject(s, idx, nowIso))
+    .filter((s: Subject | null): s is Subject => {
+      if (!s || seenSubjects.has(s.id)) return false;
+      seenSubjects.add(s.id);
+      return true;
+    })
+    .slice(0, LIMITS.maxSubjects);
+  const settings = normalizeSettings(raw.settings);
+  const cyc = isObj(raw.cycle) ? raw.cycle : {};
+  const plan = computePlan(subjects, settings);
+  const len = plan.blocks.length;
+  const rawPos = Math.max(0, Math.round(num(cyc.position, 0)));
+  const position = len === 0 ? 0 : Math.min(rawPos, len - 1);
+  return {
+    id,
+    name,
+    color: /^#[0-9a-fA-F]{6}$/.test(str(raw.color)) ? str(raw.color) : SUBJECT_COLORS[i % SUBJECT_COLORS.length],
+    subjects,
+    settings,
+    cycle: {
+      plan,
+      position,
+      cycleNumber: Math.max(1, Math.round(num(cyc.cycleNumber, 1))),
+      completedCycles: Math.max(0, Math.round(num(cyc.completedCycles, 0))),
+    },
+    createdAt: str(raw.createdAt, nowIso),
+    updatedAt: str(raw.updatedAt, nowIso),
+  };
+}
+
+/** Normaliza dados (já migrados) preenchendo padrões e descartando entradas inválidas. */
+export function normalizeData(raw: Raw, now: Date = new Date()): AppData {
+  if (!isObj(raw)) throw new DataError("Formato de dados inválido.", "invalid_format");
+  const base = createEmptyData(now);
+  const nowIso = now.toISOString();
+
+  const seenCourses = new Set<string>();
+  let courses: Course[] = (Array.isArray(raw.courses) ? raw.courses : [])
+    .map((c: unknown, i: number) => normalizeCourse(c, i, nowIso))
+    .filter((c: Course | null): c is Course => {
+      if (!c || seenCourses.has(c.id)) return false;
+      seenCourses.add(c.id);
+      return true;
+    })
+    .slice(0, LIMITS.maxCourses);
+
+  if (courses.length === 0) {
+    const seen = new Set<string>();
+    const subjects = (Array.isArray(raw.subjects) ? raw.subjects : [])
+      .map((s: unknown, i: number) => normalizeSubject(s, i, nowIso))
+      .filter((s: Subject | null): s is Subject => {
+        if (!s || seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      })
+      .slice(0, LIMITS.maxSubjects);
+    const settings = normalizeSettings(raw.settings);
+    const cyc = isObj(raw.cycle) ? raw.cycle : {};
+    const fallback = createDefaultCourse(now);
+    const plan = computePlan(subjects, settings);
+    const len = plan.blocks.length;
+    const rawPos = Math.max(0, Math.round(num(cyc.position, 0)));
+    courses = [
+      {
+        ...fallback,
+        subjects,
+        settings,
+        cycle: {
+          plan,
+          position: len === 0 ? 0 : Math.min(rawPos, len - 1),
+          cycleNumber: Math.max(1, Math.round(num(cyc.cycleNumber, 1))),
+          completedCycles: Math.max(0, Math.round(num(cyc.completedCycles, 0))),
+        },
+      },
+    ];
+  }
+
+  const requestedCourseId = str(raw.activeCourseId).trim();
+  const activeCourse = courses.find((c) => c.id === requestedCourseId) ?? courses[0];
+
   const pref = isObj(raw.preferences) ? raw.preferences : {};
   const theme = pref.theme === "light" || pref.theme === "dark" || pref.theme === "system" ? pref.theme : "system";
-  const cyc = isObj(raw.cycle) ? raw.cycle : {};
+  const rawSound = isObj(pref.sound) ? pref.sound : {};
+  const rawVol = typeof rawSound.masterVolume === "number" && Number.isFinite(rawSound.masterVolume)
+    ? rawSound.masterVolume
+    : DEFAULT_SOUND_PREFERENCES.masterVolume;
+  const sound = {
+    masterVolume: Math.min(1, Math.max(0, rawVol)),
+    uiEnabled: typeof rawSound.uiEnabled === "boolean" ? rawSound.uiEnabled : DEFAULT_SOUND_PREFERENCES.uiEnabled,
+    sessionEnabled: typeof rawSound.sessionEnabled === "boolean" ? rawSound.sessionEnabled : DEFAULT_SOUND_PREFERENCES.sessionEnabled,
+    timerEnabled: typeof rawSound.timerEnabled === "boolean" ? rawSound.timerEnabled : DEFAULT_SOUND_PREFERENCES.timerEnabled,
+    achievementEnabled: typeof rawSound.achievementEnabled === "boolean" ? rawSound.achievementEnabled : DEFAULT_SOUND_PREFERENCES.achievementEnabled,
+  };
   const history = (Array.isArray(raw.history) ? raw.history : [])
     .map(normalizeRecord)
     .filter((r: SessionRecord | null): r is SessionRecord => !!r)
     .sort((a: SessionRecord, b: SessionRecord) => b.endedAt.localeCompare(a.endedAt));
   const meta = isObj(raw.meta) ? raw.meta : {};
 
+  const allSubjects = courses.flatMap((c) => c.subjects);
   const data: AppData = {
     schemaVersion: SCHEMA_VERSION,
-    subjects,
-    settings: { cycleMinutes, sessionMinutes, minBlockMinutes },
-    preferences: { theme },
-    cycle: {
-      plan: null,
-      position: Math.max(0, Math.round(num(cyc.position, 0))),
-      cycleNumber: Math.max(1, Math.round(num(cyc.cycleNumber, 1))),
-      completedCycles: Math.max(0, Math.round(num(cyc.completedCycles, 0))),
-    },
-    activeSession: normalizeActive(raw.activeSession, subjects),
+    courses,
+    activeCourseId: activeCourse.id,
+    subjects: activeCourse.subjects,
+    settings: activeCourse.settings,
+    preferences: { theme, sound },
+    cycle: activeCourse.cycle,
+    activeSession: normalizeActive(raw.activeSession, allSubjects),
     history,
     atlas: normalizeAtlas(raw.atlas),
     meta: { createdAt: str(meta.createdAt, base.meta.createdAt), updatedAt: str(meta.updatedAt, nowIso) },

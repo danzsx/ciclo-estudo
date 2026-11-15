@@ -44,8 +44,22 @@ export interface CycleSettings {
 
 export type ThemePreference = "light" | "dark" | "system";
 
+export interface SoundPreferences {
+  /** Volume geral de 0 a 1. */
+  masterVolume: number;
+  /** Sons discretos de navegação e interface. */
+  uiEnabled: boolean;
+  /** Sons das sessões de estudo (início, pausa, retomada, conclusão, cancelamento). */
+  sessionEnabled: boolean;
+  /** Sons do cronômetro (início, pausa, retomada, finalização, transição). */
+  timerEnabled: boolean;
+  /** Sons da coleção ATLAS e revelação de conquistas. */
+  achievementEnabled: boolean;
+}
+
 export interface Preferences {
   theme: ThemePreference;
+  sound?: SoundPreferences;
 }
 
 /** Um bloco da sequência calculada do ciclo. */
@@ -104,6 +118,8 @@ export type ActiveSessionStatus = "running" | "paused";
 
 export interface ActiveSession {
   id: string;
+  courseId?: string;
+  courseName?: string;
   subjectId: string;
   subjectName: string;
   blockIndex: number;
@@ -125,6 +141,8 @@ export type SessionStatus = "completed" | "partial" | "skipped";
 
 export interface SessionRecord {
   id: string;
+  courseId?: string;
+  courseName?: string;
   subjectId: string;
   /** Nome no momento da sessão (preserva o histórico se a disciplina for renomeada/excluída). */
   subjectName: string;
@@ -155,8 +173,23 @@ export interface AtlasState {
   retroactiveCheckedAt: string | null;
 }
 
+export interface Course {
+  id: string;
+  name: string;
+  /** Cor de identificação do curso (hex). */
+  color: string;
+  subjects: Subject[];
+  settings: CycleSettings;
+  cycle: CycleState;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AppData {
   schemaVersion: number;
+  courses: Course[];
+  activeCourseId: string;
+  /** Espelhos do curso ativo para acesso direto e compatibilidade. */
   subjects: Subject[];
   settings: CycleSettings;
   preferences: Preferences;

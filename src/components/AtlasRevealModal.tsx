@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { Compass, Sparkles, X, ArrowRight } from "lucide-react";
+import { Compass, Sparkles, X, ArrowRight, RotateCw } from "lucide-react";
 import {
-  CATEGORY_META,
   RARITY_META,
   formatCardNumber,
   type AchievementDefinition,
   type UnlockedAchievement,
 } from "../core";
-import { AtlasIllustrationFrame, RARITY_STYLES } from "./AtlasCard";
+import { AtlasCard, RARITY_STYLES } from "./AtlasCard";
+import { useCardTilt } from "./useCardTilt";
+import { rarityToRevealSoundId, soundEngine } from "../audio";
 
 interface AtlasRevealModalProps {
   definition: AchievementDefinition;
@@ -23,32 +24,44 @@ export const AtlasRevealModal: React.FC<AtlasRevealModalProps> = ({
   onGoToCollection,
 }) => {
   const [revealed, setRevealed] = useState(false);
+  const [flipped, setFlipped] = useState(false);
 
   const rarityMeta = RARITY_META[definition.rarity];
-  const categoryMeta = CATEGORY_META[definition.category];
   const rarityStyle = RARITY_STYLES[definition.rarity];
   const isLegendary = definition.rarity === "legendary";
   const isHighRarity = definition.rarity === "epic" || isLegendary;
 
+  const { ref: sealedTiltRef, tiltHandlers: sealedTiltHandlers } = useCardTilt<HTMLDivElement>({
+    maxTilt: 8,
+    allowTouchDrag: true,
+    disabled: revealed,
+  });
+
   useEffect(() => {
     setRevealed(false);
+    setFlipped(false);
   }, [definition.id]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+      } else if (revealed && (e.key === "f" || e.key === "F")) {
+        setFlipped((prev) => {
+          void soundEngine.play("atlas-card-select");
+          return !prev;
+        });
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, revealed]);
 
-  const dateLabel = unlocked
-    ? new Date(unlocked.unlockedAt).toLocaleDateString("pt-BR", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-      })
-    : "Registrada hoje";
+  const effectiveUnlocked: UnlockedAchievement = unlocked ?? {
+    id: definition.id,
+    unlockedAt: new Date().toISOString(),
+    collectionId: definition.collectionId,
+  };
 
   return (
     <div
@@ -61,12 +74,13 @@ export const AtlasRevealModal: React.FC<AtlasRevealModalProps> = ({
         position: "fixed",
         inset: 0,
         zIndex: 1100,
-        backgroundColor: "rgba(0, 24, 29, 0.68)",
+        backgroundColor: "rgba(0, 24, 29, 0.72)",
         backdropFilter: "blur(6px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         padding: "1.25rem",
+        overflowY: "auto",
       }}
     >
       <div
@@ -74,11 +88,11 @@ export const AtlasRevealModal: React.FC<AtlasRevealModalProps> = ({
         className="atlas-modal-panel"
         style={{
           width: "100%",
-          maxWidth: 380,
+          maxWidth: 300,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: "1rem",
+          gap: "0.9rem",
           position: "relative",
         }}
       >
@@ -89,8 +103,8 @@ export const AtlasRevealModal: React.FC<AtlasRevealModalProps> = ({
           aria-label="Fechar revelação"
           style={{
             position: "absolute",
-            top: -8,
-            right: -8,
+            top: -10,
+            right: -10,
             zIndex: 10,
             width: 34,
             height: 34,
@@ -104,226 +118,216 @@ export const AtlasRevealModal: React.FC<AtlasRevealModalProps> = ({
         </button>
 
         {!revealed ? (
-          /* Estado Inicial: Carta Fechada / Selada */
-          <button
-            type="button"
-            onClick={() => setRevealed(true)}
-            data-testid="atlas-reveal-sealed"
-            style={{
-              width: "100%",
-              padding: "1rem",
-              borderRadius: "var(--radius-lg)",
-              background: "linear-gradient(160deg, #002a32 0%, #063842 100%)",
-              border: `1.5px solid ${isHighRarity ? "#f7a072" : "rgba(115, 186, 155, 0.5)"}`,
-              boxShadow: "var(--shadow-xl)",
-              color: "#f3f7f8",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "space-between",
-              minHeight: 410,
-              textAlign: "center",
-            }}
-          >
+          /* Estado Inicial: Carta Fechada / Selada com inclinação 2.5D */
+          <div className="atlas-card-stage atlas-card-stage--modal" style={{ width: "100%" }}>
             <div
-              style={{
-                width: "100%",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                fontSize: "0.7rem",
-                fontWeight: 700,
-                letterSpacing: "0.08em",
-                color: "#89a5ab",
-              }}
+              ref={sealedTiltRef}
+              className="atlas-card-3d"
+              data-tilting="false"
+              {...sealedTiltHandlers}
             >
-              <span className="tabular-nums">{formatCardNumber(definition.number)}</span>
-              <span style={{ color: isHighRarity ? "#f7a072" : "#73ba9b" }}>{rarityMeta.label}</span>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: "1rem",
-                padding: "1.5rem 1rem",
-              }}
-            >
-              <div
+              <button
+                type="button"
+                onClick={() => {
+                  setRevealed(true);
+                  void soundEngine.play(rarityToRevealSoundId(definition.rarity));
+                }}
+                data-testid="atlas-reveal-sealed"
                 style={{
-                  width: 84,
-                  height: 84,
-                  borderRadius: "50%",
-                  border: `1.5px solid ${isHighRarity ? "rgba(247, 160, 114, 0.55)" : "rgba(115, 186, 155, 0.45)"}`,
+                  width: "100%",
+                  padding: "1.1rem",
+                  borderRadius: "var(--radius-lg)",
+                  background: isLegendary
+                    ? "linear-gradient(160deg, #07120e 0%, #102a21 55%, #07120e 100%)"
+                    : "linear-gradient(160deg, #002a32 0%, #063842 100%)",
+                  border: `1.5px solid ${isHighRarity ? rarityStyle.border : "rgba(115, 186, 155, 0.5)"}`,
+                  boxShadow: isLegendary
+                    ? "0 20px 44px -10px rgba(0,0,0,0.82), 0 0 28px -6px rgba(243, 217, 125, 0.35)"
+                    : "var(--shadow-xl)",
+                  color: "#f3f7f8",
+                  cursor: "pointer",
                   display: "flex",
+                  flexDirection: "column",
                   alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: "rgba(255, 255, 255, 0.04)",
+                  justifyContent: "space-between",
+                  minHeight: 420,
+                  textAlign: "center",
+                  position: "relative",
+                  overflow: "hidden",
                 }}
               >
-                <Compass size={34} strokeWidth={1.4} style={{ color: isHighRarity ? "#f7a072" : "#73ba9b" }} />
-              </div>
-
-              <div>
                 <div
+                  aria-hidden="true"
+                  className={`atlas-holo-layer atlas-holo-layer--${definition.rarity}`}
+                />
+
+                <div
+                  className="atlas-layer-frame"
                   style={{
-                    fontSize: "0.68rem",
+                    width: "100%",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    fontSize: "0.7rem",
                     fontWeight: 700,
-                    letterSpacing: "0.12em",
-                    textTransform: "uppercase",
-                    color: "#73ba9b",
-                    marginBottom: "0.35rem",
+                    letterSpacing: "0.08em",
+                    color: "#89a5ab",
+                    position: "relative",
+                    zIndex: 1,
                   }}
                 >
-                  Nova Conquista Registrada
+                  <span className="tabular-nums">{formatCardNumber(definition.number)}</span>
+                  <span style={{ color: isHighRarity ? rarityStyle.badgeText : "#73ba9b" }}>
+                    {rarityMeta.label}
+                  </span>
                 </div>
-                <div style={{ fontSize: "1.15rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
-                  Selo do Arquivo ATLAS
-                </div>
-                <div style={{ fontSize: "0.8rem", color: "#bfd2d6", marginTop: "0.3rem" }}>
-                  Toque para revelar a carta colecionável
-                </div>
-              </div>
-            </div>
 
-            <div
-              style={{
-                width: "100%",
-                padding: "0.7rem 1rem",
-                borderRadius: "var(--radius-full)",
-                backgroundColor: "rgba(255, 255, 255, 0.08)",
-                border: "1px solid rgba(255, 255, 255, 0.14)",
-                fontSize: "0.82rem",
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "0.45rem",
-              }}
-            >
-              <Sparkles size={15} style={{ color: "#f7a072" }} />
-              <span>Revelar Carta</span>
+                <div
+                  className="atlas-layer-animal"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "1rem",
+                    padding: "1.5rem 1rem",
+                    position: "relative",
+                    zIndex: 1,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 88,
+                      height: 88,
+                      borderRadius: "50%",
+                      border: `1.5px solid ${isHighRarity ? rarityStyle.border : "rgba(115, 186, 155, 0.45)"}`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: "rgba(255, 255, 255, 0.04)",
+                      boxShadow: isLegendary ? "0 0 24px rgba(243, 217, 125, 0.25)" : "none",
+                    }}
+                  >
+                    <Compass
+                      size={36}
+                      strokeWidth={1.4}
+                      style={{ color: isHighRarity ? rarityStyle.accent : "#73ba9b" }}
+                    />
+                  </div>
+
+                  <div>
+                    <div
+                      style={{
+                        fontSize: "0.68rem",
+                        fontWeight: 700,
+                        letterSpacing: "0.12em",
+                        textTransform: "uppercase",
+                        color: isLegendary ? "#f3d97d" : "#73ba9b",
+                        marginBottom: "0.35rem",
+                      }}
+                    >
+                      {isLegendary ? "Relíquia Lendária Desbloqueada" : "Nova Conquista Registrada"}
+                    </div>
+                    <div style={{ fontSize: "1.18rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
+                      {definition.name}
+                    </div>
+                    <div style={{ fontSize: "0.8rem", color: "#bfd2d6", marginTop: "0.3rem" }}>
+                      Toque para revelar a carta colecionável
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className="atlas-layer-frame"
+                  style={{
+                    width: "100%",
+                    padding: "0.72rem 1rem",
+                    borderRadius: "var(--radius-full)",
+                    backgroundColor: "rgba(255, 255, 255, 0.08)",
+                    border: "1px solid rgba(255, 255, 255, 0.14)",
+                    fontSize: "0.82rem",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "0.45rem",
+                    position: "relative",
+                    zIndex: 1,
+                  }}
+                >
+                  <Sparkles size={15} style={{ color: isHighRarity ? rarityStyle.accent : "#f7a072" }} />
+                  <span>Revelar Carta</span>
+                </div>
+              </button>
             </div>
-          </button>
+          </div>
         ) : (
-          /* Estado Revelado com animação por raridade */
+          /* Estado Revelado com animação por raridade, holografia, flip e acesso à coleção */
           <div
             data-testid="atlas-reveal-opened"
             className={`atlas-reveal--${definition.rarity}`}
             style={{
               width: "100%",
-              padding: "0.85rem",
-              borderRadius: "var(--radius-lg)",
-              background: rarityStyle.cardBg,
-              border: `1.5px solid ${rarityStyle.border}`,
-              boxShadow: "var(--shadow-xl)",
               display: "flex",
               flexDirection: "column",
-              gap: "0.9rem",
+              gap: "0.85rem",
             }}
           >
-            <div
-              style={{
-                padding: "0.65rem",
-                borderRadius: "calc(var(--radius-lg) - 6px)",
-                border: `1px solid ${definition.rarity !== "common" ? rarityStyle.innerBorder : "transparent"}`,
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.85rem",
-              }}
-            >
-              <AtlasIllustrationFrame definition={definition} unlocked={true} large />
+            <AtlasCard
+              definition={definition}
+              unlocked={effectiveUnlocked}
+              variant="inspect"
+              flipped={flipped}
+              onFlipChange={setFlipped}
+              animateArtwork={true}
+              allowTouchDrag={true}
+            />
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span
-                  style={{
-                    fontSize: "0.68rem",
-                    fontWeight: 600,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    color: rarityStyle.mutedColor,
-                  }}
-                >
-                  {categoryMeta.label}
-                </span>
-                <span
-                  style={{
-                    fontSize: "0.7rem",
-                    fontWeight: 700,
-                    padding: "0.18rem 0.6rem",
-                    borderRadius: "var(--radius-full)",
-                    backgroundColor: rarityStyle.badgeBg,
-                    color: rarityStyle.badgeText,
-                    border: `1px solid ${rarityStyle.badgeBorder}`,
-                  }}
-                >
-                  {rarityMeta.label}
-                </span>
-              </div>
-
-              <div>
-                <h2
-                  style={{
-                    fontSize: "1.3rem",
-                    fontWeight: 700,
-                    letterSpacing: "-0.02em",
-                    color: rarityStyle.titleColor,
-                  }}
-                >
-                  {definition.name}
-                </h2>
-                <p
-                  style={{
-                    fontSize: "0.84rem",
-                    lineHeight: 1.55,
-                    color: rarityStyle.bodyColor,
-                    marginTop: "0.35rem",
-                  }}
-                >
-                  {definition.description}
-                </p>
-              </div>
-
-              <div
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setFlipped((prev) => !prev);
+                  void soundEngine.play("atlas-card-select");
+                }}
                 style={{
-                  fontSize: "0.74rem",
-                  color: isLegendary ? "#73ba9b" : "var(--brand-sage-dark)",
-                  fontWeight: 600,
-                  paddingTop: "0.55rem",
-                  borderTop: `1px solid ${isLegendary ? "rgba(255,255,255,0.12)" : "var(--border-subtle)"}`,
+                  justifyContent: "center",
+                  fontSize: "0.78rem",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                  padding: "0.55rem 0.85rem",
                 }}
               >
-                Adquirida em {dateLabel}
-              </div>
+                <RotateCw size={13} />
+                <span>{flipped ? "Frente" : "Verso"}</span>
+              </button>
 
-              <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.25rem" }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={onClose}
-                  style={{ flex: 1, justifyContent: "center", fontSize: "0.82rem" }}
-                >
-                  Continuar
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={onGoToCollection}
-                  style={{
-                    flex: 1.3,
-                    justifyContent: "center",
-                    fontSize: "0.82rem",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.35rem",
-                  }}
-                >
-                  <span>Ver na Coleção</span>
-                  <ArrowRight size={14} />
-                </button>
-              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onClose}
+                style={{ flex: 1, justifyContent: "center", fontSize: "0.8rem" }}
+              >
+                Continuar
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onGoToCollection}
+                style={{
+                  flex: 1.25,
+                  justifyContent: "center",
+                  fontSize: "0.8rem",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                }}
+              >
+                <span>Coleção</span>
+                <ArrowRight size={14} />
+              </button>
             </div>
           </div>
         )}
@@ -331,4 +335,3 @@ export const AtlasRevealModal: React.FC<AtlasRevealModalProps> = ({
     </div>
   );
 };
-

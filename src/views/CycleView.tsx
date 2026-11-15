@@ -20,7 +20,7 @@ import { getSubjectVisual, formatTiimoDuration } from "../utils/visuals";
 import { SubjectIcon } from "../components/SubjectIcon";
 
 export const CycleView: React.FC = () => {
-  const { data, handleJumpTo, handleRestartCycle, setActiveTab, activeSession } = useApp();
+  const { data, activeCourse, handleJumpTo, handleRestartCycle, setActiveTab, activeSession } = useApp();
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
 
   const plan = data.cycle.plan;
@@ -81,7 +81,7 @@ export const CycleView: React.FC = () => {
             </span>
           </h1>
           <p className="tabular-nums" style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginTop: "0.2rem" }}>
-            Ciclo #{data.cycle.cycleNumber} • {formatMinutes(plan.totalMinutes)} distribuídos em {blocks.length} blocos intercalados.
+            {activeCourse?.name ? `${activeCourse.name} • ` : ""}Ciclo #{data.cycle.cycleNumber} • {formatMinutes(plan.totalMinutes)} distribuídos em {blocks.length} blocos intercalados.
           </p>
         </div>
 

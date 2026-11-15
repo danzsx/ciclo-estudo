@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addCourse,
   addSubject,
   advance,
   createEmptyData,
@@ -7,6 +8,7 @@ import {
   cycleProgress,
   dailySeries,
   currentStreak,
+  deleteCourse,
   deleteSubject,
   discardSession,
   elapsedMs,
@@ -18,11 +20,13 @@ import {
   removeDemo,
   restoreSession,
   resumeSession,
+  selectCourse,
   setSessionNotes,
   skipBlock,
   startSession,
   statsBySubject,
   totalStudied,
+  updateCourse,
   updateSettings,
   updateSubject,
   type AppData,
@@ -311,5 +315,82 @@ describe("estatísticas", () => {
     expect(series[6].minutes).toBe(25);
     expect(series[5].minutes).toBe(40);
     expect(currentStreak(d.history, now)).toBe(2);
+  });
+});
+
+describe("múltiplos cursos — criar, alternar, editar, excluir", () => {
+  it("adiciona cursos distintos com disciplinas independentes (inclusive mesmo nome)", () => {
+    const { ctx } = makeCtx();
+    let d = createEmptyData(ctx.now);
+    d = unwrap(updateCourse(d, d.activeCourseId, { name: "Concurso INSS" }, ctx));
+    d = unwrap(addSubject(d, { name: "Português", weight: 5, difficulty: "medium", sessionMinutes: null }, ctx));
+    d = unwrap(addSubject(d, { name: "Direito Previdenciário", weight: 5, difficulty: "hard", sessionMinutes: null }, ctx));
+
+    const inssId = d.activeCourseId;
+    d = unwrap(addCourse(d, { name: "Vestibular" }, ctx));
+    const vestId = d.activeCourseId;
+    expect(vestId).not.toBe(inssId);
+    expect(d.subjects).toHaveLength(0);
+
+    d = unwrap(addSubject(d, { name: "Português", weight: 3, difficulty: "easy", sessionMinutes: null }, ctx));
+    d = unwrap(addSubject(d, { name: "Matemática", weight: 5, difficulty: "hard", sessionMinutes: null }, ctx));
+    expect(d.subjects.map((s) => s.name)).toEqual(["Português", "Matemática"]);
+
+    d = selectCourse(d, inssId, ctx);
+    expect(d.subjects.map((s) => s.name)).toEqual(["Português", "Direito Previdenciário"]);
+  });
+
+  it("rejeita curso com nome vazio ou duplicado", () => {
+    const { ctx } = makeCtx();
+    let d = createEmptyData(ctx.now);
+    d = unwrap(addCourse(d, { name: "Concurso INSS" }, ctx));
+    expect(addCourse(d, { name: "   " }, ctx).ok).toBe(false);
+    expect(addCourse(d, { name: "concurso inss" }, ctx).ok).toBe(false);
+  });
+
+  it("impede excluir o último curso e limpa sessão ativa se excluir o curso dela", () => {
+    const { ctx } = makeCtx();
+    let d = createEmptyData(ctx.now);
+    expect(deleteCourse(d, d.activeCourseId, ctx).ok).toBe(false);
+
+    d = unwrap(addSubject(d, { name: "Português", weight: 4, difficulty: "medium", sessionMinutes: null }, ctx));
+    const firstId = d.activeCourseId;
+    d = unwrap(addCourse(d, { name: "Vestibular" }, ctx));
+    d = unwrap(addSubject(d, { name: "Física", weight: 4, difficulty: "hard", sessionMinutes: null }, ctx));
+    const vestId = d.activeCourseId;
+
+    d = startSession(d, ctx);
+    expect(d.activeSession?.courseId).toBe(vestId);
+    d = unwrap(finishSession(d, { studiedMinutes: 50 }, ctx));
+    expect(d.history[0].courseId).toBe(vestId);
+    expect(d.history[0].courseName).toBe("Vestibular");
+
+    d = startSession(d, ctx);
+    d = unwrap(deleteCourse(d, vestId, ctx));
+    expect(d.activeCourseId).toBe(firstId);
+    expect(d.activeSession).toBeNull();
+    expect(d.history).toHaveLength(1);
+    expect(d.history[0].courseName).toBe("Vestibular");
+  });
+
+  it("avança o ciclo correto mesmo se o usuário alternar de curso durante uma sessão ativa", () => {
+    const { ctx } = makeCtx();
+    let d = withSubjects(ctx);
+    const courseAId = d.activeCourseId;
+    d = unwrap(addCourse(d, { name: "Vestibular" }, ctx));
+    d = unwrap(addSubject(d, { name: "Química", weight: 4, difficulty: "medium", sessionMinutes: null }, ctx));
+    const courseBId = d.activeCourseId;
+
+    d = selectCourse(d, courseAId, ctx);
+    d = startSession(d, ctx);
+    d = selectCourse(d, courseBId, ctx);
+    expect(d.activeCourseId).toBe(courseBId);
+
+    d = unwrap(finishSession(d, { studiedMinutes: 45 }, ctx));
+    const courseA = d.courses.find((c) => c.id === courseAId)!;
+    const courseB = d.courses.find((c) => c.id === courseBId)!;
+    expect(courseA.cycle.position).toBe(1);
+    expect(courseB.cycle.position).toBe(0);
+    expect(d.history[0].courseId).toBe(courseAId);
   });
 });

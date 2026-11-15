@@ -18,6 +18,8 @@ import {
   WEIGHT_LABELS,
   SUBJECT_COLORS,
   formatMinutes,
+  type Course,
+  type CourseInput,
   type Difficulty,
   type Subject,
   type SubjectInput,
@@ -28,6 +30,11 @@ import { SubjectIcon } from "../components/SubjectIcon";
 export const SubjectsView: React.FC = () => {
   const {
     data,
+    activeCourse,
+    handleAddCourse,
+    handleUpdateCourse,
+    handleSelectCourse,
+    handleDeleteCourse,
     handleAddSubject,
     handleUpdateSubject,
     handleDeleteSubject,
@@ -41,6 +48,13 @@ export const SubjectsView: React.FC = () => {
     setActiveTab,
   } = useApp();
 
+  const [courseModalOpen, setCourseModalOpen] = useState(false);
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null);
+  const [courseName, setCourseName] = useState("");
+  const [courseColor, setCourseColor] = useState(SUBJECT_COLORS[0]);
+  const [courseErrors, setCourseErrors] = useState<Record<string, string>>({});
+  const [confirmDeleteCourseId, setConfirmDeleteCourseId] = useState<string | null>(null);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [name, setName] = useState("");
@@ -51,6 +65,35 @@ export const SubjectsView: React.FC = () => {
   const [color, setColor] = useState(SUBJECT_COLORS[0]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const openAddCourseModal = () => {
+    setEditingCourse(null);
+    setCourseName("");
+    setCourseColor(SUBJECT_COLORS[data.courses.length % SUBJECT_COLORS.length]);
+    setCourseErrors({});
+    setCourseModalOpen(true);
+  };
+
+  const openEditCourseModal = (c: Course) => {
+    setEditingCourse(c);
+    setCourseName(c.name);
+    setCourseColor(c.color);
+    setCourseErrors({});
+    setCourseModalOpen(true);
+  };
+
+  const handleSaveCourse = (e: React.FormEvent) => {
+    e.preventDefault();
+    const input: CourseInput = { name: courseName, color: courseColor };
+    const res = editingCourse
+      ? handleUpdateCourse(editingCourse.id, input)
+      : handleAddCourse(input);
+    if (res.ok) {
+      setCourseModalOpen(false);
+    } else if (res.errors) {
+      setCourseErrors(res.errors);
+    }
+  };
 
   const openAddModal = () => {
     setEditingSubject(null);
@@ -155,6 +198,112 @@ export const SubjectsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Courses Bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "0.75rem",
+          padding: "0.85rem 1.1rem",
+          backgroundColor: "var(--bg-surface)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: "var(--radius-lg)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+          <span
+            style={{
+              fontSize: "0.72rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: "var(--text-muted)",
+              marginRight: "0.25rem",
+            }}
+          >
+            Cursos:
+          </span>
+
+          {data.courses.map((c) => {
+            const isSelected = c.id === activeCourse?.id;
+            return (
+              <div
+                key={c.id}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  borderRadius: "var(--radius-full)",
+                  border: isSelected ? `1.5px solid ${c.color}` : "1px solid var(--border-subtle)",
+                  backgroundColor: isSelected ? "var(--brand-sage-subtle)" : "var(--bg-surface-subtle)",
+                  overflow: "hidden",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSelectCourse(c.id)}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.45rem",
+                    padding: "0.4rem 0.8rem",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    fontSize: "0.82rem",
+                    fontWeight: isSelected ? 700 : 500,
+                    color: isSelected ? "var(--text-primary)" : "var(--text-secondary)",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      backgroundColor: c.color,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span>{c.name}</span>
+                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>({c.subjects.length})</span>
+                </button>
+
+                {isSelected && (
+                  <div style={{ display: "inline-flex", alignItems: "center", paddingRight: "0.35rem", gap: "0.1rem" }}>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => openEditCourseModal(c)}
+                      title="Renomear ou alterar cor do curso"
+                      style={{ padding: "0.25rem" }}
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    {data.courses.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        onClick={() => setConfirmDeleteCourseId(c.id)}
+                        title="Excluir curso"
+                        style={{ padding: "0.25rem", color: "var(--accent-hard)" }}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <button type="button" className="chip-pill" onClick={openAddCourseModal}>
+          <Plus size={14} />
+          <span>Novo Curso</span>
+        </button>
+      </div>
+
       {/* Empty State */}
       {data.subjects.length === 0 ? (
         <div
@@ -162,13 +311,13 @@ export const SubjectsView: React.FC = () => {
           style={{ textAlign: "center", padding: "3.75rem 2rem", maxWidth: 580, margin: "2rem auto" }}
         >
           <div className="section-kicker" style={{ color: "#73ba9b" }}>
-            Biblioteca Vazia
+            {activeCourse?.name ?? "Biblioteca Vazia"}
           </div>
           <h3 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.5rem" }}>
             Nenhuma disciplina <span className="serif-accent">cadastrada</span>
           </h3>
           <p style={{ color: "var(--text-secondary)", maxWidth: 440, margin: "0 auto 1.75rem", fontSize: "0.92rem", lineHeight: 1.6 }}>
-            Adicione as matérias do seu plano de estudos para que o algoritmo estruture os blocos do ciclo.
+            Adicione as matérias de <strong>{activeCourse?.name ?? "seu curso"}</strong> para que o algoritmo estruture os blocos do ciclo.
           </p>
           <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center" }}>
             <button className="btn btn-primary" onClick={openAddModal}>
@@ -533,6 +682,129 @@ export const SubjectsView: React.FC = () => {
                   onClick={() => {
                     handleDeleteSubject(confirmDeleteId);
                     setConfirmDeleteId(null);
+                  }}
+                >
+                  Confirmar Exclusão
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit Course Modal */}
+      {courseModalOpen && (
+        <div className="modal-overlay" onClick={() => setCourseModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <div className="section-kicker" style={{ marginBottom: "0.15rem" }}>
+                  {editingCourse ? "Editar Curso" : "Novo Curso"}
+                </div>
+                <h2 style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+                  {editingCourse ? editingCourse.name : "Adicionar Curso"}
+                </h2>
+              </div>
+              <button className="btn-icon" onClick={() => setCourseModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCourse}>
+              <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="course-name">
+                    Nome do Curso / Objetivo *
+                  </label>
+                  <input
+                    id="course-name"
+                    type="text"
+                    className={`input ${courseErrors.name ? "input-error" : ""}`}
+                    placeholder="Ex: Concurso INSS, Vestibular, OAB..."
+                    value={courseName}
+                    onChange={(e) => setCourseName(e.target.value)}
+                    autoFocus
+                  />
+                  {courseErrors.name && (
+                    <span className="form-error" style={{ marginTop: "0.25rem" }}>
+                      {courseErrors.name}
+                    </span>
+                  )}
+                </div>
+
+                <div>
+                  <label className="form-label">Cor de Identificação</label>
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {SUBJECT_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCourseColor(c)}
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: "50%",
+                          backgroundColor: c,
+                          border: courseColor === c ? "3px solid var(--text-primary)" : "2px solid transparent",
+                          cursor: "pointer",
+                        }}
+                        title={c}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setCourseModalOpen(false)}>
+                  Cancelar
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  {editingCourse ? "Salvar Alterações" : "Criar Curso"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Course Confirmation Modal */}
+      {confirmDeleteCourseId && (
+        <div className="modal-overlay" onClick={() => setConfirmDeleteCourseId(null)}>
+          <div className="modal-content" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-body" style={{ textAlign: "center", padding: "2rem" }}>
+              <div
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: "50%",
+                  backgroundColor: "var(--accent-hard-bg)",
+                  color: "var(--accent-hard)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: "0 auto 1rem",
+                }}
+              >
+                <AlertTriangle size={24} />
+              </div>
+
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700, marginBottom: "0.45rem" }}>
+                Excluir Curso?
+              </h3>
+              <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", lineHeight: 1.5, marginBottom: "1.5rem" }}>
+                As disciplinas e o ciclo deste curso serão removidos. O histórico de sessões já realizadas permanecerá preservado.
+              </p>
+
+              <div style={{ display: "flex", gap: "0.65rem", justifyContent: "center" }}>
+                <button className="btn btn-secondary" onClick={() => setConfirmDeleteCourseId(null)}>
+                  Cancelar
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => {
+                    handleDeleteCourse(confirmDeleteCourseId);
+                    setConfirmDeleteCourseId(null);
                   }}
                 >
                   Confirmar Exclusão

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   LayoutGrid,
   BookOpen,
@@ -8,6 +8,9 @@ import {
   Compass,
   Sliders,
   ArrowUpRight,
+  ChevronDown,
+  Plus,
+  Check,
 } from "lucide-react";
 import { useApp, type NavTab } from "../context/AppContext";
 import { ATLAS_CATALOG, formatMinutes } from "../core";
@@ -18,9 +21,13 @@ export const Sidebar: React.FC = () => {
     setActiveTab,
     activeSession,
     data,
+    activeCourse,
+    handleSelectCourse,
     streakCount,
     cycleProgressData,
   } = useApp();
+
+  const [courseMenuOpen, setCourseMenuOpen] = useState(false);
 
   const navItems: Array<{
     id: NavTab;
@@ -106,6 +113,167 @@ export const Sidebar: React.FC = () => {
           </div>
         </div>
 
+        {/* Active Course Switcher */}
+        <div style={{ position: "relative", marginBottom: "1rem" }}>
+          <button
+            type="button"
+            onClick={() => setCourseMenuOpen((o) => !o)}
+            style={{
+              width: "100%",
+              padding: "0.6rem 0.75rem",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--border-subtle)",
+              backgroundColor: "var(--bg-surface)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "0.5rem",
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+            title="Alternar curso ativo"
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", minWidth: 0 }}>
+              <span
+                style={{
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  backgroundColor: activeCourse?.color ?? "#002a32",
+                  flexShrink: 0,
+                }}
+              />
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: "0.62rem",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--text-muted)",
+                    lineHeight: 1.1,
+                  }}
+                >
+                  Curso ativo ({data.courses.length})
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.82rem",
+                    fontWeight: 600,
+                    color: "var(--text-primary)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {activeCourse?.name ?? "Curso Principal"}
+                </div>
+              </div>
+            </div>
+            <ChevronDown
+              size={15}
+              style={{
+                color: "var(--text-muted)",
+                flexShrink: 0,
+                transform: courseMenuOpen ? "rotate(180deg)" : "none",
+                transition: "transform 0.15s ease",
+              }}
+            />
+          </button>
+
+          {courseMenuOpen && (
+            <div
+              style={{
+                marginTop: "0.35rem",
+                padding: "0.35rem",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+                backgroundColor: "var(--bg-surface)",
+                boxShadow: "var(--shadow-md)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.2rem",
+              }}
+            >
+              {data.courses.map((c) => {
+                const isSelected = c.id === activeCourse?.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      handleSelectCourse(c.id);
+                      setCourseMenuOpen(false);
+                    }}
+                    style={{
+                      width: "100%",
+                      padding: "0.45rem 0.55rem",
+                      borderRadius: "var(--radius-sm)",
+                      border: "none",
+                      backgroundColor: isSelected ? "var(--brand-sage-subtle)" : "transparent",
+                      color: isSelected ? "var(--text-primary)" : "var(--text-secondary)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "0.5rem",
+                      cursor: "pointer",
+                      fontSize: "0.8rem",
+                      fontWeight: isSelected ? 600 : 500,
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.45rem", minWidth: 0 }}>
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          backgroundColor: c.color,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {c.name}
+                      </span>
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexShrink: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                      {c.subjects.length}
+                      {isSelected && <Check size={13} style={{ color: "var(--brand-sage)" }} />}
+                    </span>
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCourseMenuOpen(false);
+                  setActiveTab("subjects");
+                }}
+                style={{
+                  width: "100%",
+                  marginTop: "0.15rem",
+                  padding: "0.45rem 0.55rem",
+                  borderRadius: "var(--radius-sm)",
+                  border: "none",
+                  borderTop: "1px solid var(--border-subtle)",
+                  backgroundColor: "transparent",
+                  color: "var(--text-secondary)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.45rem",
+                  cursor: "pointer",
+                  fontSize: "0.78rem",
+                  fontWeight: 600,
+                }}
+              >
+                <Plus size={14} />
+                <span>Gerenciar / Novo Curso</span>
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Navigation List */}
         <nav aria-label="Navegação principal">
           <ul className="nav-list">
@@ -122,7 +290,7 @@ export const Sidebar: React.FC = () => {
                         ? {
                             border: "1px solid var(--brand-sage-border)",
                             backgroundColor: "var(--brand-sage-subtle)",
-                            color: "var(--brand-petrol)",
+                            color: "var(--text-primary)",
                           }
                         : undefined
                     }
@@ -183,6 +351,20 @@ export const Sidebar: React.FC = () => {
               >
                 {activeSession.subjectName}
               </div>
+              {activeSession.courseName && (
+                <div
+                  style={{
+                    fontSize: "0.68rem",
+                    color: "rgba(255,255,255,0.7)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    marginTop: "0.1rem",
+                  }}
+                >
+                  {activeSession.courseName}
+                </div>
+              )}
             </div>
             <ArrowUpRight size={16} style={{ color: "#f7a072", flexShrink: 0 }} />
           </div>

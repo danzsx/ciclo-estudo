@@ -3,18 +3,25 @@ import {
   type ActiveSession,
   type AchievementDefinition,
   type AppData,
+  type Course,
+  type CourseInput,
   type CycleBlock,
   type CycleSettings,
   type Preferences,
+  type SoundPreferences,
   type SubjectInput,
+  DEFAULT_SOUND_PREFERENCES,
+  addCourse,
   addSubject,
   createBackup,
   createEmptyData,
   currentBlock,
+  deleteCourse,
   deleteSubject,
   discardSession,
   elapsedMs,
   finishSession,
+  getActiveCourse,
   hasDemo,
   heartbeatSession,
   jumpTo,
@@ -26,9 +33,11 @@ import {
   resetAll,
   restartCycle,
   resumeSession,
+  selectCourse,
   setSessionNotes,
   skipBlock,
   startSession,
+  updateCourse,
   updateHistoryRecord,
   deleteHistoryRecord,
   updatePreferences,
@@ -52,6 +61,7 @@ import {
   Repository,
   getPlatformFiles,
 } from "../storage";
+import { initAudioGestureUnlock, soundEngine } from "../audio";
 
 export type NavTab = "dashboard" | "subjects" | "cycle" | "study" | "history" | "collection" | "settings";
 
@@ -74,6 +84,13 @@ interface AppContextValue {
   currentCycleBlock: CycleBlock | null;
   upcomingCycleBlocks: CycleBlock[];
 
+  // Active Course
+  activeCourse: Course;
+  handleAddCourse: (input: CourseInput) => { ok: boolean; errors?: Record<string, string> };
+  handleUpdateCourse: (id: string, input: CourseInput) => { ok: boolean; errors?: Record<string, string> };
+  handleSelectCourse: (id: string) => void;
+  handleDeleteCourse: (id: string) => { ok: boolean; errors?: Record<string, string> };
+
   // CRUD Subjects
   handleAddSubject: (input: SubjectInput) => { ok: boolean; errors?: Record<string, string> };
   handleUpdateSubject: (id: string, input: SubjectInput) => { ok: boolean; errors?: Record<string, string> };
@@ -83,6 +100,7 @@ interface AppContextValue {
   // Settings & Preferences
   handleUpdateSettings: (settings: CycleSettings) => { ok: boolean; errors?: Record<string, string> };
   handleUpdateTheme: (theme: Preferences["theme"]) => void;
+  handleUpdateSoundPreferences: (patch: Partial<SoundPreferences>) => void;
 
   // Cycle navigation
   handleJumpTo: (index: number) => void;
@@ -130,7 +148,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [data, setData] = useState<AppData>(() => createEmptyData());
-  const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
+  const [activeTab, setActiveTabState] = useState<NavTab>("dashboard");
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [notices, setNotices] = useState<string[]>([]);
@@ -141,7 +159,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeReveal, setActiveReveal] = useState<AchievementDefinition | null>(null);
 
   const repoRef = useRef<Repository | null>(null);
+  const completedAlertedSessionIdRef = useRef<string | null>(null);
   const platformFiles = useMemo(() => getPlatformFiles(), []);
+
+  const setActiveTab = (tab: NavTab) => {
+    setActiveTabState((prev) => {
+      if (prev !== tab) {
+        if (tab === "collection") {
+          void soundEngine.play("atlas-collection-open");
+        } else {
+          void soundEngine.play("ui-tab");
+        }
+      }
+      return tab;
+    });
+  };
+
+  // Inicializa desbloqueio de áudio por gesto do usuário (sem reproduzir som ao abrir)
+  useEffect(() => {
+    return initAudioGestureUnlock();
+  }, []);
+
+  // Sincroniza preferências sonoras com o motor centralizado
+  useEffect(() => {
+    soundEngine.setPreferences(data.preferences.sound ?? DEFAULT_SOUND_PREFERENCES);
+  }, [data.preferences.sound]);
 
   // Initialize repository
   useEffect(() => {
@@ -238,14 +280,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return elapsedMs(data.activeSession, nowMs);
   }, [data.activeSession, nowMs]);
 
+  // Aviso de finalização do tempo planejado (visual + sonoro, uma vez por sessão)
+  useEffect(() => {
+    const session = data.activeSession;
+    if (!session) {
+      completedAlertedSessionIdRef.current = null;
+      return;
+    }
+    if (
+      session.status === "running" &&
+      session.plannedMinutes > 0 &&
+      activeElapsedMs >= session.plannedMinutes * 60_000 &&
+      completedAlertedSessionIdRef.current !== session.id
+    ) {
+      completedAlertedSessionIdRef.current = session.id;
+      void soundEngine.play("timer-complete");
+      setNotices((prev) => {
+        const msg = `Meta de ${session.plannedMinutes} min atingida em ${session.subjectName}.`;
+        return prev.includes(msg) ? prev : [...prev, msg];
+      });
+    }
+  }, [data.activeSession, activeElapsedMs]);
+
   const currentCycleBlock = useMemo(() => currentBlock(data), [data]);
   const upcomingCycleBlocks = useMemo(() => upcomingBlocks(data, 6), [data]);
+
+  const activeCourse = useMemo(() => getActiveCourse(data) ?? data.courses[0], [data]);
+
+  // CRUD Courses Handlers
+  const handleAddCourse = (input: CourseInput) => {
+    const res = addCourse(data, input, getCtx());
+    if (res.ok) {
+      setData(res.value);
+      void soundEngine.play("ui-confirm");
+      return { ok: true };
+    }
+    return { ok: false, errors: res.errors };
+  };
+
+  const handleUpdateCourse = (id: string, input: CourseInput) => {
+    const res = updateCourse(data, id, input, getCtx());
+    if (res.ok) {
+      setData(res.value);
+      void soundEngine.play("ui-confirm");
+      return { ok: true };
+    }
+    return { ok: false, errors: res.errors };
+  };
+
+  const handleSelectCourse = (id: string) => {
+    setData((prev) => selectCourse(prev, id, getCtx()));
+    void soundEngine.play("ui-select");
+  };
+
+  const handleDeleteCourse = (id: string) => {
+    const res = deleteCourse(data, id, getCtx());
+    if (res.ok) {
+      setData(res.value);
+      void soundEngine.play("ui-confirm");
+      return { ok: true };
+    }
+    return { ok: false, errors: res.errors };
+  };
 
   // CRUD Subjects Handlers
   const handleAddSubject = (input: SubjectInput) => {
     const res = addSubject(data, input, getCtx());
     if (res.ok) {
       setData(res.value);
+      void soundEngine.play("ui-confirm");
       return { ok: true };
     }
     return { ok: false, errors: res.errors };
@@ -255,6 +358,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const res = updateSubject(data, id, input, getCtx());
     if (res.ok) {
       setData(res.value);
+      void soundEngine.play("ui-confirm");
       return { ok: true };
     }
     return { ok: false, errors: res.errors };
@@ -262,10 +366,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const handleDeleteSubject = (id: string) => {
     setData((prev) => deleteSubject(prev, id, getCtx()));
+    void soundEngine.play("ui-select");
   };
 
   const handleMoveSubject = (id: string, dir: -1 | 1) => {
     setData((prev) => moveSubject(prev, id, dir, getCtx()));
+    void soundEngine.play("ui-select");
   };
 
   // Settings & Theme Handlers
@@ -273,6 +379,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const res = updateSettings(data, settings, getCtx());
     if (res.ok) {
       setData(res.value);
+      void soundEngine.play("ui-confirm");
       return { ok: true };
     }
     return { ok: false, errors: res.errors };
@@ -280,32 +387,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const handleUpdateTheme = (theme: Preferences["theme"]) => {
     setData((prev) => updatePreferences(prev, { theme }, getCtx()));
+    void soundEngine.play("ui-select");
+  };
+
+  const handleUpdateSoundPreferences = (patch: Partial<SoundPreferences>) => {
+    setData((prev) => {
+      const current = prev.preferences.sound ?? DEFAULT_SOUND_PREFERENCES;
+      const nextSound: SoundPreferences = { ...current, ...patch };
+      return updatePreferences(prev, { sound: nextSound }, getCtx());
+    });
   };
 
   // Cycle navigation
   const handleJumpTo = (index: number) => {
     setData((prev) => jumpTo(prev, index, getCtx()));
+    void soundEngine.play("ui-select");
   };
 
   const handleRestartCycle = () => {
     setData((prev) => restartCycle(prev, getCtx()));
+    void soundEngine.play("ui-confirm");
   };
 
   // Study Flow Handlers
   const handleStartSession = () => {
     setData((prev) => startSession(prev, getCtx()));
+    void soundEngine.playSessionLifecycle("start");
   };
 
   const handlePauseSession = () => {
     setData((prev) => pauseSession(prev, getCtx()));
+    void soundEngine.playSessionLifecycle("pause");
   };
 
   const handleResumeSession = () => {
     setData((prev) => resumeSession(prev, getCtx()));
+    void soundEngine.playSessionLifecycle("resume");
   };
 
   const handleDiscardSession = () => {
     setData((prev) => discardSession(prev, getCtx()));
+    void soundEngine.play("session-cancel");
   };
 
   const enqueueReveals = (newlyUnlocked: AchievementDefinition[]) => {
@@ -320,14 +442,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const openReveal = (def: AchievementDefinition) => {
     setPendingReveals((prev) => prev.filter((a) => a.id !== def.id));
     setActiveReveal(def);
+    void soundEngine.play("ui-modal-open");
   };
 
   const dismissReveal = (id: string) => {
     setPendingReveals((prev) => prev.filter((a) => a.id !== id));
+    void soundEngine.play("ui-modal-close");
   };
 
   const closeActiveReveal = () => {
     setActiveReveal(null);
+    void soundEngine.play("ui-modal-close");
   };
 
   const handleFinishSession = (studiedMinutes: number, notes?: string) => {
@@ -335,7 +460,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (res.ok) {
       const newlyUnlocked = diffUnlockedAchievements(data, res.value);
       setData(res.value);
-      enqueueReveals(newlyUnlocked);
+      void soundEngine.play("session-complete");
+      if (newlyUnlocked.length > 0) {
+        enqueueReveals(newlyUnlocked);
+        window.setTimeout(() => {
+          void soundEngine.play("atlas-unlock");
+        }, 280);
+      }
       return { ok: true };
     }
     return { ok: false, errors: res.errors };
@@ -343,6 +474,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const handleSkipBlock = () => {
     setData((prev) => skipBlock(prev, getCtx()));
+    void soundEngine.play("session-cancel");
   };
 
   const handleUpdateSessionNotes = (notes: string) => {
@@ -355,7 +487,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (res.ok) {
       const newlyUnlocked = diffUnlockedAchievements(data, res.value);
       setData(res.value);
-      enqueueReveals(newlyUnlocked);
+      void soundEngine.play("ui-confirm");
+      if (newlyUnlocked.length > 0) {
+        enqueueReveals(newlyUnlocked);
+        window.setTimeout(() => {
+          void soundEngine.play("atlas-unlock");
+        }, 260);
+      }
       return { ok: true };
     }
     return { ok: false, errors: res.errors };
@@ -363,21 +501,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const handleDeleteHistoryRecord = (id: string) => {
     setData((prev) => deleteHistoryRecord(prev, id, getCtx()));
+    void soundEngine.play("ui-select");
   };
 
   // Demo & Reset
   const handleLoadDemo = () => {
     setData((prev) => loadDemo(prev, getCtx()));
+    void soundEngine.play("ui-confirm");
   };
 
   const handleRemoveDemo = () => {
     setData((prev) => removeDemo(prev, getCtx()));
+    void soundEngine.play("ui-select");
   };
 
   const hasDemoSubjects = useMemo(() => hasDemo(data), [data]);
 
   const handleResetAll = () => {
     setData((prev) => resetAll(prev, getCtx()));
+    void soundEngine.play("ui-confirm");
   };
 
   // Backup handlers
@@ -439,12 +581,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeElapsedMs,
         currentCycleBlock,
         upcomingCycleBlocks,
+        activeCourse,
+        handleAddCourse,
+        handleUpdateCourse,
+        handleSelectCourse,
+        handleDeleteCourse,
         handleAddSubject,
         handleUpdateSubject,
         handleDeleteSubject,
         handleMoveSubject,
         handleUpdateSettings,
         handleUpdateTheme,
+        handleUpdateSoundPreferences,
         handleJumpTo,
         handleRestartCycle,
         handleStartSession,

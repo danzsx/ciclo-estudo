@@ -208,4 +208,37 @@ describe("backup — exportar e importar", () => {
     expect(r.data.subjects).toHaveLength(3);
     expect(r.data.history).toHaveLength(1);
   });
+
+  it("migra dados v2 sem cursos para v3 preservando disciplinas, ciclo e configurações", () => {
+    const v2Raw = {
+      schemaVersion: 2,
+      subjects: [
+        {
+          id: "s1",
+          name: "Direito Previdenciário",
+          weight: 5,
+          difficulty: "hard",
+          sessionMinutes: null,
+          color: "#002a32",
+          createdAt: "2026-04-01T10:00:00.000Z",
+          updatedAt: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      settings: { cycleMinutes: 300, sessionMinutes: 50, minBlockMinutes: 25 },
+      preferences: { theme: "dark" },
+      cycle: { plan: null, position: 1, cycleNumber: 2, completedCycles: 1 },
+      activeSession: null,
+      history: [],
+      atlas: { unlocked: [], retroactiveCheckedAt: null },
+      meta: { createdAt: "2026-04-01T10:00:00.000Z", updatedAt: "2026-04-01T10:00:00.000Z" },
+    };
+    const { data, migratedFrom } = parseData(JSON.stringify(v2Raw), ctx.now);
+    expect(migratedFrom).toBe(2);
+    expect(data.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(data.courses).toHaveLength(1);
+    expect(data.courses[0].subjects[0].name).toBe("Direito Previdenciário");
+    expect(data.courses[0].cycle.cycleNumber).toBe(2);
+    expect(data.courses[0].cycle.completedCycles).toBe(1);
+    expect(data.subjects[0].name).toBe("Direito Previdenciário");
+  });
 });

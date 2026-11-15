@@ -1,6 +1,11 @@
 import { LIMITS } from "./defaults";
 import type { CycleSettings, Difficulty, Result } from "./types";
 
+export interface CourseInput {
+  name: string;
+  color?: string;
+}
+
 export interface SubjectInput {
   name: string;
   weight: number;
@@ -13,6 +18,23 @@ const DIFFICULTIES: Difficulty[] = ["easy", "medium", "hard"];
 
 function isInt(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && Number.isInteger(n);
+}
+
+export function validateCourseInput(
+  input: CourseInput,
+  existingNames: string[] = [],
+): Result<CourseInput> {
+  const errors: Record<string, string> = {};
+  const name = (input.name ?? "").trim().replace(/\s+/g, " ");
+  if (!name) errors.name = "Informe o nome do curso.";
+  else if (name.length > LIMITS.courseNameMax) errors.name = `Use no máximo ${LIMITS.courseNameMax} caracteres.`;
+  else if (existingNames.some((n) => n.trim().toLocaleLowerCase("pt-BR") === name.toLocaleLowerCase("pt-BR")))
+    errors.name = "Já existe um curso com esse nome.";
+
+  if (input.color !== undefined && !/^#[0-9a-fA-F]{6}$/.test(input.color)) errors.color = "Cor inválida.";
+
+  if (Object.keys(errors).length) return { ok: false, errors };
+  return { ok: true, value: { ...input, name } };
 }
 
 export function validateSubjectInput(
